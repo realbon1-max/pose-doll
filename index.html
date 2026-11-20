@@ -69,6 +69,8 @@ label.c input{width:22px;height:22px;accent-color:var(--blue)}
 .prow label.c{flex:1}
 .tapbar{position:absolute;left:10px;right:10px;top:10px;z-index:3;background:var(--bg);border:2px solid var(--blue);border-radius:12px;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.18)}
 .tapbar p{margin:0 0 8px;font-weight:700;font-size:15px;line-height:1.45}
+.loupe{position:absolute;right:10px;bottom:10px;width:150px;height:150px;border-radius:50%;border:3px solid var(--blue);background:#fff;z-index:4;box-shadow:0 6px 18px rgba(0,0,0,.25);pointer-events:none}
+.legend{font-size:13px;color:var(--mute);margin:6px 0 0}
 .row3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.row3 .btn{min-height:44px;padding:0 8px}
 </style>
 </head>
@@ -83,6 +85,7 @@ label.c input{width:22px;height:22px;accent-color:var(--blue)}
     </div>
     <canvas id="cv" hidden></canvas>
     <div class="busy" id="busy">ポーズを解析中…</div>
+    <canvas class="loupe" id="loupe" width="300" height="300" hidden></canvas>
     <div class="tapbar" id="tapbar" hidden><p id="tapmsg"></p><div class="row3"><button class="btn" id="tapBack">戻る</button><button class="btn" id="tapSkip">スキップ</button><button class="btn pri" id="tapDone">完了</button></div></div>
   </section>
 
@@ -93,6 +96,9 @@ label.c input{width:22px;height:22px;accent-color:var(--blue)}
       <p class="msg" id="msg">写真を選ぶかここへドロップしてください</p>
       <div class="seg" id="num" role="group" aria-label="検出する人数" style="margin-top:10px">
         <button data-v="1" aria-pressed="false">1人</button><button data-v="2" aria-pressed="true">2人まで（プロレス・格闘技など）</button>
+      </div>
+      <div class="seg" id="acc" role="group" aria-label="解析の精度" style="margin-top:8px">
+        <button data-v="hq" aria-pressed="true">高精度（初回 約120MB）</button><button data-v="std" aria-pressed="false">軽量（初回 約55MB）</button>
       </div>
     </div>
 
@@ -114,10 +120,13 @@ label.c input{width:22px;height:22px;accent-color:var(--blue)}
     <div class="card">
       <h2>関節の修正</h2>
       <label class="c"><input type="checkbox" id="edit">関節をドラッグで調整する</label>
+      <p class="legend">塗りつぶしの点＝本人の左側、白抜きの点＝右側。ドラッグ中は右下に拡大鏡が出ます。</p>
       <label class="c"><input type="checkbox" id="photo">元写真を薄く重ねる（確認用）</label>
       <button class="btn" id="reset" disabled>検出位置に戻す</button>
       <div class="row" style="margin-top:8px"><button class="btn" id="tapBtn" disabled>タップで関節を指定</button><button class="btn" id="altBtn" disabled>別の検出候補</button></div>
       <button class="btn" id="addBtn" disabled style="margin-top:8px">人物を追加して手動で指定</button>
+      <p class="legend" style="margin-top:12px">左右が逆になっているとき（選択中の人物）</p>
+      <div class="row3"><button class="btn" id="swAll" disabled>全身</button><button class="btn" id="swArm" disabled>腕だけ</button><button class="btn" id="swLeg" disabled>脚だけ</button></div>
       <p class="note">組み合った写真で自動検出がずれたときは「タップで関節を指定」で、頭・肩・ひじ…の順に写真をタップしてください。</p>
     </div>
 
@@ -131,7 +140,8 @@ label.c input{width:22px;height:22px;accent-color:var(--blue)}
       <label class="c"><input type="checkbox" id="guide" checked>当たり線（青い補助線）</label>
       <label class="c"><input type="checkbox" id="crop" checked>人物に合わせて余白を詰める</label>
       <label class="c"><input type="checkbox" id="trans">背景を透明にする</label>
-      <label class="c"><input type="checkbox" id="tint">2人目を赤い線で描き分ける</label>
+      <label class="c"><input type="checkbox" id="tint" checked>人物ごとに線の色を変える</label>
+      <label class="c"><input type="checkbox" id="fade" checked>奥の人物を薄い線で描く</label>
     </div>
 
     <div class="card">
@@ -146,12 +156,14 @@ label.c input{width:22px;height:22px;accent-color:var(--blue)}
 
 <script type="module">
 import {FilesetResolver,PoseLandmarker,HandLandmarker,FaceLandmarker} from './vision_bundle.mjs';
+import * as ort from './ort/ort.min.mjs';
+ort.env.wasm.wasmPaths=new URL('./ort/',location.href).href;ort.env.wasm.numThreads=1;
 {
 const $=id=>document.getElementById(id);
 const cv=$('cv');let ctx=cv.getContext('2d');
-const S={img:null,people:[],orig:null,body:'n',drag:null,view:null,name:'pose',bulk:1,cur:0,front:0,num:2};
+const S={img:null,people:[],orig:null,body:'n',drag:null,view:null,name:'pose',bulk:1,cur:0,front:0,num:2,acc:'hq'};
 let PS=null,REL='';
-const INKS=['#18191b','#b3261e','#1f6b3a'],PCOL=['#3a7bd5','#d4452c','#2e9d55'];
+const INKS=['#18191b','#b3261e','#1f5fa8'],PCOL=['#3a7bd5','#d4452c','#2e9d55'];
 let INK='#18191b';const BLUE='#3a7bd5';
 let mp=null,mpReady=null,downloads=null;
 if(location.search.includes('debug'))window.__S=S;
@@ -271,10 +283,126 @@ async function attachHands(people,img,m){
     p.hands[cl.sd]=cl.pts;used.push(cl.pts[0]);
   }
 }
+/* ---------- YOLO11-pose（ONNX）：密着・逆さまに強い全身検出 ---------- */
+const YM={std:{name:'YOLO11-L',parts:['models/yolo11l-pose.part0','models/yolo11l-pose.part1']},
+          hq:{name:'YOLO11-X',parts:['models/yolo11x-pose.part0','models/yolo11x-pose.part1','models/yolo11x-pose.part2']}};
+const ysess={};
+async function fetchCached(url){
+  try{const c=await caches.open('pose-doll-models-v1');let r=await c.match(url);
+    if(!r){r=await fetch(url);if(!r.ok)throw new Error(url+' '+r.status);await c.put(url,r.clone())}
+    return new Uint8Array(await r.arrayBuffer())}
+  catch(e){const r=await fetch(url);if(!r.ok)throw new Error('モデルを読み込めませんでした');return new Uint8Array(await r.arrayBuffer())}
+}
+async function yoloSession(key){
+  if(ysess[key])return ysess[key];
+  ysess[key]=(async()=>{
+    const M=YM[key],bufs=[];let i=0;
+    for(const u of M.parts){i++;msg(`高精度モデル（${M.name}）を読み込み中… ${i}/${M.parts.length}（2回目以降は端末に保存したものを使います）`);bufs.push(await fetchCached(u))}
+    const all=new Uint8Array(bufs.reduce((n,b)=>n+b.length,0));let o=0;for(const b of bufs){all.set(b,o);o+=b.length}
+    msg('モデルを準備中…');
+    try{if(navigator.gpu&&await navigator.gpu.requestAdapter())return await ort.InferenceSession.create(all,{executionProviders:['webgpu'],graphOptimizationLevel:'all'})}catch(e){console.warn('webgpu',e)}
+    try{ort.env.wasm.proxy=true;return await ort.InferenceSession.create(all,{executionProviders:['wasm'],graphOptimizationLevel:'all'})}catch(e){console.warn('wasm-proxy',e)}
+    try{ort.env.wasm.proxy=false;return await ort.InferenceSession.create(all,{executionProviders:['wasm'],graphOptimizationLevel:'all'})}catch(e){console.warn('wasm',e)}
+    throw new Error('この端末ではモデルを実行できませんでした');
+  })();
+  ysess[key].catch(()=>{delete ysess[key]});
+  return ysess[key];
+}
+function letterbox(img,deg){
+  const w=img.naturalWidth,h=img.naturalHeight,r=deg*Math.PI/180;
+  const cw=deg%180===0?w:h,ch=deg%180===0?h:w,k=640/Math.max(cw,ch);
+  const c=document.createElement('canvas');c.width=c.height=640;const x=c.getContext('2d');
+  x.fillStyle='#727272';x.fillRect(0,0,640,640);
+  x.translate(cw*k/2,ch*k/2);x.rotate(r);x.drawImage(img,-w*k/2,-h*k/2,w*k,h*k);
+  const cs=Math.cos(-r),sn=Math.sin(-r);
+  const inv=(u,v)=>{const du=u-cw*k/2,dv=v-ch*k/2;return{x:(du*cs-dv*sn)/k+w/2,y:(du*sn+dv*cs)/k+h/2}};
+  const d=x.getImageData(0,0,640,640).data,t=new Float32Array(3*640*640),N=640*640;
+  for(let i=0;i<N;i++){t[i]=d[i*4]/255;t[N+i]=d[i*4+1]/255;t[2*N+i]=d[i*4+2]/255}
+  return{t,inv};
+}
+function iou(a,b){const x0=Math.max(a[0],b[0]),y0=Math.max(a[1],b[1]),x1=Math.min(a[2],b[2]),y1=Math.min(a[3],b[3]);
+  const i=Math.max(0,x1-x0)*Math.max(0,y1-y0);return i/((a[2]-a[0])*(a[3]-a[1])+(b[2]-b[0])*(b[3]-b[1])-i+1e-6)}
+const C2M=[0,2,5,7,8,11,12,13,14,15,16,23,24,25,26,27,28];
+function synthPts(P){
+  const T=torsoLen(P);
+  const at=(p,dx,dy)=>({x:p.x+dx,y:p.y+dy,z:0,v:.3});
+  P[1]=at(V.lerp(P[2],P[0],.35),0,0);P[3]=at(V.lerp(P[2],P[7],.35),0,0);P[4]=at(V.lerp(P[5],P[0],.35),0,0);P[6]=at(V.lerp(P[5],P[8],.35),0,0);
+  const em=V.mid(P[2],P[5]),dn=V.sub(P[0],em),sd=V.mul(V.sub(P[2],P[5]),.25);
+  P[9]=at(V.add(V.add(P[0],V.mul(dn,.9)),sd),0,0);P[10]=at(V.sub(V.add(P[0],V.mul(dn,.9)),sd),0,0);
+  for(const [w,e,a,b,c] of [[15,13,17,19,21],[16,14,18,20,22]]){const d=V.norm(V.sub(P[w],P[e])),n=V.perp(d);
+    const f=(k,s)=>at(P[w],d.x*k*T+n.x*s*T,d.y*k*T+n.y*s*T);P[a]=f(.1,.04);P[b]=f(.13,-.01);P[c]=f(.05,-.05)}
+  for(const [an,kn,he,to] of [[27,25,29,31],[28,26,30,32]]){const d=V.norm(V.sub(P[an],P[kn]));
+    P[to]=at(P[an],d.x*T*.14,d.y*T*.14);P[he]=at(P[an],-d.x*T*.03,-d.y*T*.03)}
+  return P;
+}
+function synthWorld(P){
+  const H=V.mid(P[23],P[24]),u=V.norm(V.sub(V.mid(P[11],P[12]),H)),r={x:-u.y,y:u.x},T=torsoLen(P);
+  return P.map(p=>{const q=V.sub(p,H);return{x:V.dot(q,r)/T*.5,y:-V.dot(q,u)/T*.5,z:0}});
+}
+async function yoloCands(img,key){
+  const sess=await yoloSession(key);
+  const W=img.naturalWidth,H=img.naturalHeight,cands=[];
+  let n=0;
+  for(const deg of[0,180,90,270]){
+    n++;msg(`姿勢を解析中…（${n}/4）`);await tick();
+    const L=letterbox(img,deg);
+    const out=await sess.run({[sess.inputNames[0]]:new ort.Tensor('float32',L.t,[1,3,640,640])});
+    const o=out[sess.outputNames[0]].data,A=8400;
+    const dets=[];
+    for(let a=0;a<A;a++){const cf=o[4*A+a];if(cf<.2)continue;
+      const cx=o[a],cy=o[A+a],bw=o[2*A+a],bh=o[3*A+a];
+      dets.push({cf,box:[cx-bw/2,cy-bh/2,cx+bw/2,cy+bh/2],a})}
+    dets.sort((p,q)=>q.cf-p.cf);
+    const keep=[];for(const d of dets){if(keep.every(k=>iou(k.box,d.box)<.6))keep.push(d);if(keep.length>=8)break}
+    for(const d of keep){
+      const kp=[];for(let j=0;j<17;j++){const q=L.inv(o[(5+3*j)*A+d.a],o[(6+3*j)*A+d.a]);kp.push({x:q.x,y:q.y,z:0,v:o[(7+3*j)*A+d.a]})}
+      const cs=[[d.box[0],d.box[1]],[d.box[2],d.box[1]],[d.box[0],d.box[3]],[d.box[2],d.box[3]]].map(([u,v])=>L.inv(u,v));
+      const xs=cs.map(p=>p.x),ys=cs.map(p=>p.y);
+      const area=(Math.min(W,Math.max(...xs))-Math.max(0,Math.min(...xs)))*(Math.min(H,Math.max(...ys))-Math.max(0,Math.min(...ys)));
+      if(area<.02*W*H)continue;
+      const P=new Array(33);C2M.forEach((m,j)=>P[m]=kp[j]);synthPts(P);
+      const kv=kp.reduce((s,k)=>s+k.v,0)/17;
+      cands.push({pts:P,deg,conf:d.cf,score:d.cf*(.5+.5*kv)*Math.sqrt(Math.min(1,area/(.12*W*H))),
+        box:[Math.max(0,Math.min(...xs)),Math.max(0,Math.min(...ys)),Math.min(W,Math.max(...xs)),Math.min(H,Math.max(...ys))]});
+    }
+  }
+  cands.sort((a,b)=>b.score-a.score);
+  const uniq=[];for(const c of cands)if(uniq.every(u=>sameness(u.pts,c.pts)>.35))uniq.push(c);
+  if(location.search.includes('debug'))window.__yolo=uniq.map(c=>({deg:c.deg,conf:+c.conf.toFixed(2),score:+c.score.toFixed(2),nose:[Math.round(c.pts[0].x),Math.round(c.pts[0].y)]}));
+  return uniq;
+}
+/* MediaPipe で同じ人物を切り出し解析し、足先・指の付け根・奥行きを補う */
+async function refineWithMP(img,m,c){
+  const P=c.pts,T=torsoLen(P);
+  let [x0,y0,x1,y1]=c.box;const mx=(x1-x0)*.15,my=(y1-y0)*.15;x0-=mx;y0-=my;x1+=mx;y1+=my;
+  c.world=synthWorld(P);
+  try{
+    await m.pose.setOptions({numPoses:1});
+    const R=rotCanvas(img,c.deg,640,x0,y0,x1-x0,y1-y0);const pr=m.pose.detect(R.c);
+    if(!pr.landmarks||!pr.landmarks.length)return c;
+    const Q=pr.landmarks[0].map(l=>{const q=R.inv(l.x*R.c.width,l.y*R.c.height);return{x:q.x,y:q.y,z:(l.z||0)*R.c.width/R.k,v:l.visibility??1}});
+    const J=[11,12,13,14,15,16,23,24,25,26,27,28];
+    let dd=J.reduce((s,i)=>s+d2(P[i],Q[i]),0)/J.length/T;
+    let Qa=Q;const ds=J.reduce((s,i)=>s+d2(P[i],Q[SWAP[i]]),0)/J.length/T;
+    if(ds<dd){Qa=Q.map((_,i)=>Q[SWAP[i]]);dd=ds}
+    if(dd>.3)return c;
+    for(const [an,ks] of [[27,[29,31]],[28,[30,32]]])if(d2(P[an],Qa[an])<.25*T){const dx=P[an].x-Qa[an].x,dy=P[an].y-Qa[an].y;for(const k of ks)P[k]={x:Qa[k].x+dx,y:Qa[k].y+dy,z:0,v:Qa[k].v}}
+    for(const [w,ks] of [[15,[17,19,21]],[16,[18,20,22]]])if(d2(P[w],Qa[w])<.25*T){const dx=P[w].x-Qa[w].x,dy=P[w].y-Qa[w].y;for(const k of ks)P[k]={x:Qa[k].x+dx,y:Qa[k].y+dy,z:0,v:Qa[k].v}}
+    P.forEach((p,i)=>{p.z=Qa[i].z});
+    const Wl=pr.worldLandmarks&&pr.worldLandmarks[0];
+    if(Wl){const ww=Wl.map(R.invW);c.world=Qa===Q?ww:ww.map((_,i)=>ww[SWAP[i]])}
+  }catch(e){console.warn(e)}
+  return c;
+}
 async function detect(img){
   const m=await initModel();
-  await m.pose.setOptions({numPoses:2});
-  const clusters=await gatherClusters(img,m);
+  let clusters=null;
+  try{clusters=await yoloCands(img,S.acc)}catch(e){console.warn(e);msg('YOLOモデルが使えないため、簡易モデルで解析します…');await tick()}
+  if(clusters){
+    msg('足先と奥行きを解析中…');await tick();
+    for(const c of clusters.slice(0,6))await refineWithMP(img,m,c);
+    for(const c of clusters)if(!c.world)c.world=synthWorld(c.pts);
+  }else{await m.pose.setOptions({numPoses:2});clusters=await gatherClusters(img,m)}
   S.clusters=clusters;
   const picked=[];
   for(let i=0;i<clusters.length&&picked.length<S.num;i++)if(picked.every(j=>distinct(clusters[j],clusters[i])))picked.push(i);
@@ -296,10 +424,10 @@ async function load(file){
 }
 async function analyzeImage(){
   const img=S.img;if(!img)return;
-  $('busy').classList.add('on');msg('解析中…（初回は解析データ約36MBの読み込みに時間がかかります）');
+  $('busy').classList.add('on');msg('解析中…（初回は解析データの読み込みに時間がかかります）');
   try{
     const people=await detect(img);
-    $('empty').hidden=true;cv.hidden=false;['save','keep','reset','tapBtn','altBtn','addBtn'].forEach(i=>$(i).disabled=false);
+    $('empty').hidden=true;cv.hidden=false;['save','keep','reset','tapBtn','altBtn','addBtn','swAll','swArm','swLeg'].forEach(i=>$(i).disabled=false);
     if(!people.length){S.people=[];S.orig=[];buildWho();$('photo').checked=true;render();msg('人物を自動検出できませんでした。「人物を追加して手動で指定」から関節をタップしてください');$('busy').classList.remove('on');return}
     S.people=people;S.orig=clone(people);S.cur=0;
     S.front=0;if(people.length>1){PS=people[0];const t0=frame().T;PS=people[1];const t1=frame().T;S.front=t1>t0?1:0}
@@ -432,14 +560,15 @@ function showAna(A){
 }
 
 /* ---------- 描画パーツ ---------- */
-let LW=2.5,GUIDE=true;
+let LW=2.5,GUIDE=true,GA=.75;
+const mixW=(hex,t)=>{const n=parseInt(hex.slice(1),16),f=c=>Math.round(c+(255-c)*t);return'#'+[n>>16,(n>>8)&255,n&255].map(f).map(v=>v.toString(16).padStart(2,'0')).join('')};
 function shape(path,guide){
   ctx.fillStyle='#fff';ctx.strokeStyle=INK;ctx.lineWidth=LW;ctx.lineJoin='round';ctx.lineCap='round';
   ctx.beginPath();path();ctx.fill();ctx.stroke();
-  if(GUIDE&&guide){ctx.save();ctx.strokeStyle=BLUE;ctx.globalAlpha=.75;ctx.lineWidth=Math.max(LW*.2,LW*.45);ctx.beginPath();guide();ctx.stroke();ctx.restore()}
+  if(GUIDE&&guide){ctx.save();ctx.strokeStyle=BLUE;ctx.globalAlpha=GA;ctx.lineWidth=Math.max(LW*.2,LW*.45);ctx.beginPath();guide();ctx.stroke();ctx.restore()}
 }
 function lines(path,w=.9){ctx.save();ctx.strokeStyle=INK;ctx.lineWidth=LW*w;ctx.lineCap='round';ctx.beginPath();path();ctx.stroke();ctx.restore()}
-function guides(path){if(!GUIDE)return;ctx.save();ctx.strokeStyle=BLUE;ctx.globalAlpha=.75;ctx.lineWidth=LW*.45;ctx.lineCap='round';ctx.beginPath();path();ctx.stroke();ctx.restore()}
+function guides(path){if(!GUIDE)return;ctx.save();ctx.strokeStyle=BLUE;ctx.globalAlpha=GA;ctx.lineWidth=LW*.45;ctx.lineCap='round';ctx.beginPath();path();ctx.stroke();ctx.restore()}
 function limb(A,B,ra,rb,bulge=1.05,tm=.4,g=true){
   const d=V.norm(V.sub(B,A)),n=V.perp(d),L=V.len(V.sub(B,A));
   const M=V.lerp(A,B,tm),rm=Math.max(ra,rb)*bulge;
@@ -675,7 +804,10 @@ function bounds(){
 }
 function drawAll(){
   const order=vis().sort((a,b)=>(a===S.front)-(b===S.front));
-  for(const i of order){PS=S.people[i];INK=$('tint').checked?INKS[i%2]:'#18191b';drawFigure(PS._E)}
+  const fade=$('fade').checked&&order.length>1;
+  for(const i of order){PS=S.people[i];const base=$('tint').checked?INKS[i%3]:'#18191b';
+    INK=fade&&i!==S.front?mixW(base,.55):base;GA=fade&&i!==S.front?.5:.75;drawFigure(PS._E)}
+  GA=.75;
   INK='#18191b';
 }
 function compose(target,opts){
@@ -697,7 +829,10 @@ function compose(target,opts){
   const u=1/sc*(maxSide/1000);
   if(handles){const r=12.6*u;for(const pi of vis())S.people[pi].pts.forEach((p,i)=>{if(!HANDLES.includes(i))return;
     const on=S.drag&&S.drag.pi===pi&&S.drag.i===i;
-    c.beginPath();c.arc(p.x,p.y,r,0,Math.PI*2);c.fillStyle=on?'#111':PCOL[pi];c.globalAlpha=.85;c.fill();c.globalAlpha=1;c.lineWidth=r*.3;c.strokeStyle='#fff';c.stroke()})}
+    const left=[7,11,13,15,17,19,23,25,27,29,31].includes(i);
+    c.beginPath();c.arc(p.x,p.y,r,0,Math.PI*2);
+    if(left||on){c.fillStyle=on?'#111':PCOL[pi];c.globalAlpha=.88;c.fill();c.globalAlpha=1;c.lineWidth=r*.3;c.strokeStyle='#fff';c.stroke()}
+    else{c.fillStyle='#fff';c.globalAlpha=.9;c.fill();c.globalAlpha=1;c.lineWidth=r*.42;c.strokeStyle=PCOL[pi];c.stroke()}})}
   if(labels&&S.people.length>1){for(const pi of vis()){PS=S.people[pi];const {T}=frame();const p=PS.pts[0];const r=18*u;
     const x=p.x+T*.42,y=p.y-T*.42;c.beginPath();c.arc(x,y,r,0,Math.PI*2);c.fillStyle=PCOL[pi];c.fill();
     c.fillStyle='#fff';c.font=`700 ${22*u}px sans-serif`;c.textAlign='center';c.textBaseline='middle';c.fillText(String(pi+1),x,y+1*u)}}
@@ -722,20 +857,35 @@ function render(){
 function toImg(e){const r=cv.getBoundingClientRect(),{sc,b}=S.view;
   const x=(e.clientX-r.left)*cv.width/r.width,y=(e.clientY-r.top)*cv.height/r.height;return{x:x/sc+b.x0,y:y/sc+b.y0}}
 cv.addEventListener('pointerdown',e=>{
-  if(S.tap){e.preventDefault();tapAt(toImg(e));return}
+  if(S.tap){e.preventDefault();S.aim=true;cv.setPointerCapture(e.pointerId);loupe(e,TAPSEQ[S.tap.step][1]);return}
   if(!$('edit').checked||!S.people.length)return;
   const p=toImg(e),r=cv.getBoundingClientRect(),tol=28*(cv.width/r.width)/S.view.sc;
   let best=null,bd=tol;
   for(const pi of vis())HANDLES.forEach(i=>{const d=V.len(V.sub(S.people[pi].pts[i],p));if(d<bd){bd=d;best={pi,i}}});
   if(best){S.drag=best;if(S.cur!==best.pi){S.cur=best.pi;buildWho()}cv.setPointerCapture(e.pointerId);e.preventDefault();render()}
 });
-cv.addEventListener('pointermove',e=>{if(!S.drag)return;const P=S.people[S.drag.pi],p=toImg(e),q=P.pts[S.drag.i];
+cv.addEventListener('pointermove',e=>{
+  if(S.tap&&S.aim){loupe(e,TAPSEQ[S.tap.step][1]);return}
+  if(!S.drag)return;loupe(e,NAMES[S.drag.i]||'');const P=S.people[S.drag.pi],p=toImg(e),q=P.pts[S.drag.i];
   const dx=p.x-q.x,dy=p.y-q.y;q.x=p.x;q.y=p.y;
   const mv=arr=>{if(arr)arr.forEach(o=>{o.x+=dx;o.y+=dy})};
   if(S.drag.i===15)mv(P.hands.L);if(S.drag.i===16)mv(P.hands.R);if(S.drag.i===0)mv(P.face);
   render()});
-const end=()=>{if(S.drag){S.drag=null;render()}};
+const end=e=>{$('loupe').hidden=true;
+  if(S.tap&&S.aim){S.aim=false;if(e.type==='pointerup')tapAt(toImg(e));return}
+  if(S.drag){S.drag=null;render()}};
 cv.addEventListener('pointerup',end);cv.addEventListener('pointercancel',end);
+const NAMES={0:'鼻',7:'左耳',8:'右耳',11:'左肩',12:'右肩',13:'左ひじ',14:'右ひじ',15:'左手首',16:'右手首',17:'左小指',18:'右小指',19:'左人差し指',20:'右人差し指',23:'左股関節',24:'右股関節',25:'左ひざ',26:'右ひざ',27:'左足首',28:'右足首',29:'左かかと',30:'右かかと',31:'左つま先',32:'右つま先'};
+function loupe(e,label){
+  const L=$('loupe'),x=L.getContext('2d'),r=cv.getBoundingClientRect();
+  const cx=(e.clientX-r.left)*cv.width/r.width,cy=(e.clientY-r.top)*cv.height/r.height;
+  const src=150/3*(cv.width/r.width);
+  x.fillStyle='#fff';x.fillRect(0,0,300,300);
+  x.drawImage(cv,cx-src/2,cy-src/2,src,src,0,0,300,300);
+  x.strokeStyle='#e8452c';x.lineWidth=3;x.beginPath();x.moveTo(150,110);x.lineTo(150,190);x.moveTo(110,150);x.lineTo(190,150);x.stroke();
+  if(label){x.font='700 26px sans-serif';x.textAlign='center';x.lineWidth=6;x.strokeStyle='#fff';x.strokeText(label,150,268);x.fillStyle='#111';x.fillText(label,150,268)}
+  L.hidden=false;
+}
 
 /* ---------- タップで関節を指定 ---------- */
 const TAPSEQ=[[0,'頭（鼻の位置）'],[11,'左肩'],[12,'右肩'],[13,'左ひじ'],[14,'右ひじ'],[15,'左手首'],[16,'右手首'],[23,'左の股関節（腰）'],[24,'右の股関節（腰）'],[25,'左ひざ'],[26,'右ひざ'],[27,'左足首'],[28,'右足首'],[31,'左足のつま先'],[32,'右足のつま先']];
@@ -745,7 +895,7 @@ function startTap(pi){
   tapMsg();render();$('stage').scrollIntoView({behavior:'smooth',block:'start'});
 }
 function tapMsg(){const [,name]=TAPSEQ[S.tap.step];
-  $('tapmsg').textContent=`人物${S.tap.pi+1}の「${name}」をタップ（${S.tap.step+1}/${TAPSEQ.length}）`+(/[左右]/.test(name)?'　※写っている本人から見た左右':'')+'。赤い丸が今の位置です'}
+  $('tapmsg').textContent=`人物${S.tap.pi+1}の「${name}」を指で押さえ、拡大鏡で位置を合わせて離す（${S.tap.step+1}/${TAPSEQ.length}）`+(/[左右]/.test(name)?'　※写っている本人から見た左右':'')+'。赤い丸が今の位置です'}
 function tapAt(q){
   const p=S.people[S.tap.pi],i=TAPSEQ[S.tap.step][0],o=p.pts[i];
   const dx=q.x-o.x,dy=q.y-o.y;
@@ -805,6 +955,18 @@ function addPerson(){
   finalizeManual(p,null);
   S.people.push(p);S.orig=clone(S.people);buildWho();startTap(S.people.length-1);
 }
+function swapLR(which){
+  const p=S.people[S.cur];if(!p)return;
+  const head=[[1,4],[2,5],[3,6],[7,8],[9,10]],arm=[[11,12],[13,14],[15,16],[17,18],[19,20],[21,22]],leg=[[23,24],[25,26],[27,28],[29,30],[31,32]];
+  const pairs=which==='all'?[...head,...arm,...leg]:which==='arm'?arm:leg;
+  for(const arr of[p.pts,p.world])if(arr)for(const [a,b] of pairs){const t=arr[a];arr[a]=arr[b];arr[b]=t}
+  if(which!=='leg'){const t=p.hands.L;p.hands.L=p.hands.R;p.hands.R=t;const o=p.ov.L;p.ov.L=p.ov.R;p.ov.R=o}
+  if(which!=='arm'){const o=p.ov.FL;p.ov.FL=p.ov.FR;p.ov.FR=o}
+  syncOv();msg(`人物${S.cur+1}の${which==='all'?'全身':which==='arm'?'腕':'脚'}の左右を入れ替えました`);render();
+}
+$('swAll').onclick=()=>swapLR('all');$('swArm').onclick=()=>swapLR('arm');$('swLeg').onclick=()=>swapLR('leg');
+$('acc').onclick=e=>{const b=e.target.closest('button');if(!b)return;S.acc=b.dataset.v;
+  $('acc').querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed',x===b));if(S.img)analyzeImage()};
 $('tapBtn').onclick=()=>{if(S.people.length)startTap(S.cur);else addPerson()};
 $('altBtn').onclick=nextAlt;
 $('addBtn').onclick=addPerson;
@@ -864,7 +1026,7 @@ $('swap').onclick=()=>{if(S.people.length>1){S.front=(S.front+1)%S.people.length
 for(const id in OVMAP)$(id).addEventListener('input',()=>{const p=S.people[S.cur];if(p){p.ov[OVMAP[id]]=$(id).value;render()}});
 $('num').onclick=e=>{const b=e.target.closest('button');if(!b)return;S.num=+b.dataset.v;
   $('num').querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed',x===b));if(S.img)analyzeImage()};
-['edit','photo','guide','crop','lw','bulk','tint'].forEach(i=>$(i).addEventListener('input',render));
+['edit','photo','guide','crop','lw','bulk','tint','fade'].forEach(i=>$(i).addEventListener('input',render));
 $('body').onclick=e=>{const b=e.target.closest('button');if(!b)return;S.body=b.dataset.v;
   $('body').querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed',x===b));render()};
 const st=$('stage');
