@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ポーズ人形メーカー</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;700&display=swap" rel="stylesheet">
+<style>
+/* VOICE: 落ち着いた画材道具。説明より手が動く。
+   IDEA: クロッキー帳に鉛筆と「ノンフォトブルー」の当たり線で描くデッサン人形。
+   PICTURE: 生成された人形そのものを大きく。編集中は関節に青い点。
+   COLOUR and TYPE: 白い紙、黒鉛インク、当たり線の青 #3a7bd5。Zen Kaku Gothic New。
+   LAYOUT: 上に小さな題、すぐ作業キャンバス、その下に操作。600px以下は縦積み。 */
+:root{color-scheme:light dark;--bg:light-dark(#ffffff,#16181b);--panel:light-dark(#f3f5f8,#202328);--ink:light-dark(#18191b,#eceef1);--mute:light-dark(#5d636b,#a3a9b1);--line:light-dark(#d9dde3,#33373d);--blue:#3a7bd5;--blue2:light-dark(#e7f0fc,#1d2c42)}
+:root[data-theme=light]{color-scheme:light}:root[data-theme=dark]{color-scheme:dark}
+*{box-sizing:border-box;min-width:0}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 "Zen Kaku Gothic New",system-ui,sans-serif;overflow-x:clip}
+header{padding:20px max(4vw,16px) 8px;display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+h1{font-size:clamp(26px,4vw,36px);line-height:1.1;margin:0;font-weight:700}
+header p{margin:0;color:var(--mute);font-size:15px}
+main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:20px;padding:8px max(4vw,16px) 32px;max-width:1240px;margin:0 auto}
+@media(max-width:860px){main{grid-template-columns:minmax(0,1fr)}}
+.stage{position:relative;background:var(--panel);border-radius:14px;min-height:62vh;display:grid;place-items:center;overflow:hidden;border:1px solid var(--line)}
+.stage canvas{max-width:100%;max-height:78vh;display:block;touch-action:none;background:#fff;box-shadow:0 1px 0 var(--line),0 10px 30px rgba(0,0,0,.08)}
+.empty{text-align:center;padding:24px;max-width:420px}
+.empty svg{width:150px;height:auto;margin-bottom:10px}
+.drop{outline:3px dashed var(--blue);outline-offset:-10px}
+.busy{position:absolute;inset:0;display:none;place-items:center;background:color-mix(in srgb,var(--panel) 80%,transparent);font-weight:700}
+.busy.on{display:grid}
+.side{display:flex;flex-direction:column;gap:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}
+.card h2{font-size:15px;margin:0 0 10px;font-weight:700}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:46px;padding:0 18px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:inherit;font-weight:700;cursor:pointer;width:100%}
+.btn.pri{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.btn.blue{background:var(--blue);color:#fff;border-color:var(--blue)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid var(--blue);outline-offset:2px}
+.row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px}
+label.f{display:grid;grid-template-columns:7.5em minmax(0,1fr);align-items:center;gap:8px;margin:8px 0;font-size:15px}
+select{font:inherit;font-size:16px;min-height:44px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink);padding:0 8px}
+input[type=range]{width:100%;accent-color:var(--blue);min-height:32px}
+label.c{display:flex;align-items:center;gap:10px;min-height:40px;font-size:15px;cursor:pointer}
+label.c input{width:22px;height:22px;accent-color:var(--blue)}
+.seg{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.seg button{flex:1;min-height:44px;border:0;background:var(--bg);color:var(--ink);font:inherit;font-size:15px;cursor:pointer}
+.seg button[aria-pressed=true]{background:var(--blue);color:#fff;font-weight:700}
+.msg{font-size:14px;color:var(--mute);margin:8px 0 0;min-height:1.4em}
+.gal{display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:8px}
+.gal figure{margin:0;position:relative;background:#fff;border:1px solid var(--line);border-radius:8px;overflow:hidden;aspect-ratio:3/4}
+.gal img{width:100%;height:100%;object-fit:contain;display:block;cursor:pointer}
+.gal .x{position:absolute;top:2px;right:2px;width:30px;height:30px;border-radius:50%;border:0;background:rgba(0,0,0,.55);color:#fff;font-size:16px;cursor:pointer}
+.gal:empty::after{content:"保存したポーズ人形がここに並びます";color:var(--mute);font-size:14px;grid-column:1/-1}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;place-items:center;padding:16px;z-index:9}
+.modal.on{display:grid}
+.modal div{background:var(--bg);border-radius:14px;padding:14px;max-width:min(560px,100%);text-align:center}
+.modal img{max-width:100%;max-height:70vh;background:#fff;display:block;margin:0 auto 10px}
+.hint{font-size:13px;color:var(--mute)}
+@media(prefers-reduced-motion:no-preference){.stage canvas{animation:fade .35s ease}@keyframes fade{from{opacity:0;transform:scale(.985)}}}
+</style>
+</head>
+<body>
+<header><h1>ポーズ人形メーカー</h1><p>人物写真1枚から、デッサン人形のポーズ線画を作って保存</p></header>
+<main>
+  <section class="stage" id="stage">
+    <div class="empty" id="empty">
+      <svg viewBox="0 0 120 160" fill="#fff" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><ellipse cx="60" cy="22" rx="14" ry="18"/><path d="M60 4v36M46 24q14 5 28 0" stroke="#3a7bd5" stroke-width="1.2" fill="none"/><path d="M40 48q20-8 40 0l-6 34q-14 5-28 0z"/><path d="M46 82q14 5 28 0l4 18q-18 10-36 0z"/><path d="M42 98l-8 54h10l10-50M78 98l8 54H76l-10-50"/><path d="M40 50l-14 44M80 50l14 44"/><circle cx="40" cy="50" r="7"/><circle cx="80" cy="50" r="7"/></svg>
+      <p style="margin:0 0 14px">全身が写った写真がいちばん正確です。<br>画像はこの端末内だけで処理されます。</p>
+      <button class="btn pri" id="pick2">写真を選ぶ</button>
+    </div>
+    <canvas id="cv" hidden></canvas>
+    <div class="busy" id="busy">ポーズを解析中…</div>
+  </section>
+
+  <aside class="side">
+    <div class="card">
+      <input type="file" id="file" accept="image/*" hidden>
+      <div class="row"><button class="btn pri" id="pick">写真を選ぶ</button><button class="btn blue" id="save" disabled>PNGで保存</button></div>
+      <p class="msg" id="msg">写真を選ぶかここへドロップしてください</p>
+    </div>
+
+    <div class="card">
+      <h2>関節の修正</h2>
+      <label class="c"><input type="checkbox" id="edit">関節をドラッグで調整する</label>
+      <label class="c"><input type="checkbox" id="photo">元写真を薄く重ねる（確認用）</label>
+      <button class="btn" id="reset" disabled>検出位置に戻す</button>
+    </div>
+
+    <div class="card">
+      <h2>人形のスタイル</h2>
+      <div class="seg" id="body" role="group" aria-label="体型">
+        <button data-v="n" aria-pressed="true">標準</button><button data-v="f" aria-pressed="false">女性型</button><button data-v="m" aria-pressed="false">男性型</button>
+      </div>
+      <label class="f">線の太さ<input type="range" id="lw" min="1" max="6" step="0.5" value="2.5"></label>
+      <label class="f">肉付き<input type="range" id="bulk" min="0.7" max="1.4" step="0.05" value="1"></label>
+      <label class="c"><input type="checkbox" id="guide" checked>当たり線（青い補助線）</label>
+      <label class="c"><input type="checkbox" id="crop" checked>人物に合わせて余白を詰める</label>
+      <label class="c"><input type="checkbox" id="trans">背景を透明にする</label>
+    </div>
+
+    <div class="card">
+      <h2>ギャラリー（この端末に保存）</h2>
+      <button class="btn" id="keep" disabled>ギャラリーに追加</button>
+      <div class="gal" id="gal" style="margin-top:12px"></div>
+    </div>
+  </aside>
+</main>
+
+<div class="modal" id="modal"><div><img id="mimg" alt="保存用の画像"><p class="hint">画像を長押し（右クリック）して保存してください</p><button class="btn" id="mclose">閉じる</button></div></div>
+
+<script src="pose.js"></script>
+<script>
+{
+const $=id=>document.getElementById(id);
+const cv=$('cv');let ctx=cv.getContext('2d');
+const S={img:null,pts:null,orig:null,body:'n',drag:-1,view:null,name:'pose'};
+const INK='#18191b',BLUE='#3a7bd5';
+let pose=null,poseReady=null,resolver=null,downloads=null;
+
+/* ---------- 検出 ---------- */
+function initPose(){
+  if(poseReady)return poseReady;
+  pose=new Pose({locateFile:f=>f});
+  pose.setOptions({modelComplexity:1,smoothLandmarks:false,enableSegmentation:false,minDetectionConfidence:0.4,staticImageMode:true});
+  pose.onResults(r=>{if(resolver){resolver(r);resolver=null}});
+  poseReady=pose.initialize().then(()=>pose);
+  return poseReady;
+}
+async function detect(img){
+  await initPose();
+  const c=document.createElement('canvas');
+  const k=Math.min(1,1280/Math.max(img.naturalWidth,img.naturalHeight));
+  c.width=Math.round(img.naturalWidth*k);c.height=Math.round(img.naturalHeight*k);
+  c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+  const p=new Promise(r=>resolver=r);
+  await pose.send({image:c});
+  return p;
+}
+async function load(file){
+  if(!file||!file.type.startsWith('image/'))return msg('画像ファイルを選んでください');
+  S.name=(file.name||'pose').replace(/\.[^.]+$/,'');
+  const url=URL.createObjectURL(file);const img=new Image();
+  img.onload=async()=>{
+    $('busy').classList.add('on');msg('解析中…（初回はモデル読み込みに少し時間がかかります）');
+    try{
+      const r=await detect(img);
+      if(!r.poseLandmarks){msg('人物が見つかりませんでした。全身がはっきり写った写真でお試しください');$('busy').classList.remove('on');return}
+      S.img=img;
+      S.orig=r.poseLandmarks.map(l=>({x:l.x*img.naturalWidth,y:l.y*img.naturalHeight,z:l.z*img.naturalWidth,v:l.visibility??1}));
+      S.pts=S.orig.map(p=>({...p}));
+      $('empty').hidden=true;cv.hidden=false;['save','keep','reset'].forEach(i=>$(i).disabled=false);
+      const low=[25,26,27,28].filter(i=>S.pts[i].v<0.5).length;
+      msg(low?'脚が写っていない部分は推定で描いています。ずれは「関節の修正」で直せます':'完成しました。ずれている関節はドラッグで直せます');
+      render();
+    }catch(e){console.error(e);msg('解析に失敗しました：'+(e.message||e))}
+    $('busy').classList.remove('on');
+  };
+  img.onerror=()=>msg('画像を読み込めませんでした（HEICの場合はJPEGに変換してください）');
+  img.src=url;
+}
+function msg(t){$('msg').textContent=t}
+
+/* ---------- 幾何 ---------- */
+const V={add:(a,b)=>({x:a.x+b.x,y:a.y+b.y}),sub:(a,b)=>({x:a.x-b.x,y:a.y-b.y}),mul:(a,k)=>({x:a.x*k,y:a.y*k}),len:a=>Math.hypot(a.x,a.y),
+  mid:(a,b)=>({x:(a.x+b.x)/2,y:(a.y+b.y)/2}),lerp:(a,b,t)=>({x:a.x+(b.x-a.x)*t,y:a.y+(b.y-a.y)*t}),
+  norm:a=>{const l=Math.hypot(a.x,a.y)||1;return{x:a.x/l,y:a.y/l}},perp:a=>({x:-a.y,y:a.x}),dot:(a,b)=>a.x*b.x+a.y*b.y};
+
+function frame(){
+  const P=S.pts,N=V.mid(P[11],P[12]),C=V.mid(P[23],P[24]);
+  const T=Math.max(V.len(V.sub(C,N)),V.len(V.sub(P[11],P[12]))*1.1,20);
+  return{N,C,T};
+}
+
+/* ---------- 描画パーツ ---------- */
+let LW=2.5,GUIDE=true;
+function shape(path,guide){
+  ctx.fillStyle='#fff';ctx.strokeStyle=INK;ctx.lineWidth=LW;ctx.lineJoin='round';ctx.lineCap='round';
+  ctx.beginPath();path();ctx.fill();ctx.stroke();
+  if(GUIDE&&guide){ctx.save();ctx.strokeStyle=BLUE;ctx.globalAlpha=.75;ctx.lineWidth=Math.max(1,LW*.45);ctx.beginPath();guide();ctx.stroke();ctx.restore()}
+}
+function limb(A,B,ra,rb,bulge=1.05,tm=.4){
+  const d=V.norm(V.sub(B,A)),n=V.perp(d),L=V.len(V.sub(B,A));
+  const M=V.lerp(A,B,tm),rm=Math.max(ra,rb)*bulge;
+  const a1=V.add(A,V.mul(n,ra)),m1=V.add(M,V.mul(n,rm)),b1=V.add(B,V.mul(n,rb));
+  const a2=V.sub(A,V.mul(n,ra)),m2=V.sub(M,V.mul(n,rm)),b2=V.sub(B,V.mul(n,rb));
+  const ang=Math.atan2(n.y,n.x);
+  shape(()=>{
+    ctx.moveTo(a1.x,a1.y);
+    const c1=V.sub(V.mul(m1,2),V.mid(a1,b1));ctx.quadraticCurveTo(c1.x,c1.y,b1.x,b1.y);
+    ctx.arc(B.x,B.y,rb,ang,ang-Math.PI,true);
+    const c2=V.sub(V.mul(m2,2),V.mid(a2,b2));ctx.quadraticCurveTo(c2.x,c2.y,a2.x,a2.y);
+    ctx.arc(A.x,A.y,ra,ang+Math.PI,ang,true);ctx.closePath();
+  },L>rm*1.5?()=>{
+    const e=V.lerp(A,B,.15),f=V.lerp(A,B,.85);ctx.moveTo(e.x,e.y);ctx.lineTo(f.x,f.y);
+    const X=V.lerp(A,B,.55),r=(ra+rb)/2*1.02;
+    ctx.moveTo(X.x+n.x*r,X.y+n.y*r);
+    ctx.ellipse(X.x,X.y,r*.28,r,Math.atan2(d.y,d.x),-Math.PI/2,Math.PI/2,false);
+  }:null);
+}
+function ball(P,r){shape(()=>{ctx.moveTo(P.x+r,P.y);ctx.arc(P.x,P.y,r,0,Math.PI*2)})}
+
+function torso(F){
+  const P=S.pts,{N,C,T}=F,k=S.bulk;
+  const v=V.norm(V.sub(C,N));let s=V.perp(v);
+  if(V.dot(s,V.sub(P[11],P[12]))<0)s=V.mul(s,-1);
+  const bt=S.body;
+  const shMin=T*(bt==='m'?.34:bt==='f'?.27:.3)*k,waMin=T*(bt==='m'?.25:bt==='f'?.19:.22)*k,hiMin=T*(bt==='f'?.3:.26)*k;
+  const widen=(Q,c,min,sg)=>{const o=V.sub(Q,c),p=V.dot(o,s);const want=sg*Math.max(Math.abs(p),min);return V.add(Q,V.mul(s,want-p))};
+  const LS=widen(P[11],N,shMin,1),RS=widen(P[12],N,shMin,-1);
+  const LH=widen(P[23],C,hiMin,1),RH=widen(P[24],C,hiMin,-1);
+  const WM=V.lerp(N,C,.64);
+  const WL=widen(V.lerp(P[11],P[23],.64),WM,waMin,1),WR=widen(V.lerp(P[12],P[24],.64),WM,waMin,-1);
+  const WLc=V.lerp(WL,WM,.12),WRc=V.lerp(WR,WM,.12);
+  const CR=V.add(C,V.mul(v,T*.24));
+  const down=V.mul(v,T*.06);
+  // 骨盤
+  shape(()=>{
+    ctx.moveTo(WLc.x,WLc.y);
+    const o1=V.add(V.lerp(WLc,LH,.55),V.mul(s,T*.05));ctx.quadraticCurveTo(o1.x,o1.y,LH.x,LH.y);
+    const q1=V.add(V.lerp(LH,CR,.5),V.mul(v,T*.08));ctx.quadraticCurveTo(q1.x,q1.y,CR.x,CR.y);
+    const q2=V.add(V.lerp(RH,CR,.5),V.mul(v,T*.08));ctx.quadraticCurveTo(q2.x,q2.y,RH.x,RH.y);
+    const o2=V.add(V.lerp(WRc,RH,.55),V.mul(s,-T*.05));ctx.quadraticCurveTo(o2.x,o2.y,WRc.x,WRc.y);
+    ctx.closePath();
+  },()=>{
+    const a=V.lerp(LH,RH,.08),b=V.lerp(LH,RH,.92),c=V.add(V.mid(a,b),V.mul(v,T*.12));
+    ctx.moveTo(a.x,a.y);ctx.quadraticCurveTo(c.x,c.y,b.x,b.y);
+    ctx.moveTo(WM.x,WM.y);ctx.lineTo(CR.x,CR.y);
+  });
+  // 胸郭
+  const NB=V.sub(N,V.mul(v,T*.04));
+  shape(()=>{
+    ctx.moveTo(LS.x,LS.y);
+    const o1=V.add(V.lerp(LS,WLc,.45),V.mul(s,T*.04));ctx.quadraticCurveTo(o1.x,o1.y,WLc.x,WLc.y);
+    const b=V.add(WM,down);ctx.quadraticCurveTo(b.x,b.y,WRc.x,WRc.y);
+    const o2=V.add(V.lerp(RS,WRc,.45),V.mul(s,-T*.04));ctx.quadraticCurveTo(o2.x,o2.y,RS.x,RS.y);
+    ctx.quadraticCurveTo(NB.x,NB.y,LS.x,LS.y);ctx.closePath();
+  },()=>{
+    ctx.moveTo(N.x,N.y);const m=V.add(V.lerp(N,WM,.5),V.mul(s,T*.01));ctx.quadraticCurveTo(m.x,m.y,WM.x,WM.y);
+    const y=V.lerp(N,WM,.55),a=V.lerp(V.lerp(LS,WLc,.55),y,.1),bb=V.lerp(V.lerp(RS,WRc,.55),y,.1),c=V.add(y,V.mul(v,T*.07));
+    ctx.moveTo(a.x,a.y);ctx.quadraticCurveTo(c.x,c.y,bb.x,bb.y);
+  });
+  if(bt==='f'){
+    const y=V.lerp(N,WM,.4),r=T*.12*k;
+    ctx.save();ctx.strokeStyle=INK;ctx.lineWidth=LW*.9;
+    for(const sg of[1,-1]){const c=V.add(y,V.mul(s,sg*shMin*.5));const a=Math.atan2(v.y,v.x);
+      ctx.beginPath();ctx.arc(c.x,c.y,r,a-1.25,a+1.25);ctx.stroke()}
+    ctx.restore();
+  }
+  return{LS,RS,s,v};
+}
+
+function head(F,s){
+  const P=S.pts,{N,T}=F;
+  const ear=V.mid(P[7],P[8]);
+  let up=V.norm(V.sub(ear,N));
+  const H=T*.52,W=H*.76;
+  const c=V.add(ear,V.mul(up,H*.08));
+  const side=V.perp(up);const sgn=V.dot(side,s)<0?-1:1;
+  const f=Math.max(-.92,Math.min(.92,V.dot(V.sub(P[0],ear),side)/(W*.5)*1.4));
+  const rot=Math.atan2(up.y,up.x)+Math.PI/2;
+  // 首
+  const chin=V.sub(c,V.mul(up,H*.3));
+  limb(V.add(N,V.mul(up,-T*.02)),chin,T*.1,T*.08,1,.5);
+  shape(()=>{ctx.ellipse(c.x,c.y,W/2,H/2,rot,0,Math.PI*2)},()=>{
+    const rx=Math.abs(f)*W/2;
+    ctx.save();ctx.translate(c.x,c.y);ctx.rotate(rot);
+    if(rx<2){ctx.moveTo(0,-H/2);ctx.lineTo(0,H/2)}
+    else{const fs=V.dot(V.sub(P[0],ear),side)>0?1:-1;ctx.moveTo(0,-H/2);ctx.ellipse(0,0,rx,H/2,0,-Math.PI/2,Math.PI/2,fs<0)}
+    const ey=H*.06;ctx.moveTo(-W/2,ey);ctx.ellipse(0,ey,W/2,H*.07,0,Math.PI,0,true);
+    ctx.restore();
+  });
+}
+
+function hand(W,I,Pk,T){
+  const tip=V.mid(I,Pk);const d=V.norm(V.sub(tip,W));const L=Math.max(V.len(V.sub(tip,W))*1.5,T*.17);
+  limb(W,V.add(W,V.mul(d,L)),T*.045,T*.05,1.15,.6);
+}
+function foot(A,Hl,Toe,T){
+  const r=T*.05;
+  const heel=V.lerp(A,Hl,.9),toe=Toe;
+  limb(heel,toe,r,r*.85,1.1,.5);
+  ball(A,T*.052);
+}
+
+function drawFigure(){
+  const P=S.pts,F=frame(),T=F.T,k=S.bulk;
+  const z=i=>P[i].z;
+  const parts=[];
+  for(const [sh,el,wr,ix,pk,sg] of [[11,13,15,19,17,1],[12,14,16,20,18,-1]]){
+    parts.push({z:(z(sh)+z(el))/2,f:()=>{limb(P[sh],P[el],T*.095*k,T*.068*k);ball(P[sh],T*.105*k);ball(P[el],T*.06*k)}});
+    parts.push({z:(z(el)+z(wr))/2,f:()=>{limb(P[el],P[wr],T*.066*k,T*.045*k);hand(P[wr],P[ix],P[pk],T*k);ball(P[wr],T*.042*k)}});
+  }
+  for(const [hp,kn,an,hl,to] of [[23,25,27,29,31],[24,26,28,30,32]]){
+    parts.push({z:(z(hp)+z(kn))/2,f:()=>{limb(P[hp],P[kn],T*.16*k,T*.095*k,1.08,.3);ball(P[kn],T*.09*k)}});
+    parts.push({z:(z(kn)+z(an))/2,f:()=>{limb(P[kn],P[an],T*.092*k,T*.058*k,1.1,.3);foot(P[an],P[hl],P[to],T*k);ball(P[kn],T*.09*k)}});
+  }
+  const tz=(z(11)+z(12)+z(23)+z(24))/4;
+  let tor=null;
+  parts.push({z:tz,f:()=>{tor=torso(F)}});
+  parts.push({z:tz-1e-4,f:()=>{ball(P[11],T*.105*k);ball(P[12],T*.105*k)}});
+  parts.push({z:Math.min(tz,z(0))-1e-3,f:()=>head(F,tor?tor.s:V.perp(V.norm(V.sub(F.C,F.N))))});
+  parts.sort((a,b)=>b.z-a.z);
+  parts.forEach(p=>p.f());
+}
+
+/* ---------- レンダリング ---------- */
+const HANDLES=[0,7,8,11,12,13,14,15,16,17,18,19,20,23,24,25,26,27,28,29,30,31,32];
+function bounds(){
+  const P=S.pts,{T}=frame();let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  P.forEach(p=>{x0=Math.min(x0,p.x);y0=Math.min(y0,p.y);x1=Math.max(x1,p.x);y1=Math.max(y1,p.y)});
+  const m=T*.45;return{x0:x0-m,y0:y0-m*1.1,x1:x1+m,y1:y1+m*.6};
+}
+function compose(target,opts){
+  const {crop,trans,photo,handles,maxSide}=opts;
+  const iw=S.img.naturalWidth,ih=S.img.naturalHeight;
+  let b=crop?bounds():{x0:0,y0:0,x1:iw,y1:ih};
+  if(opts.fixed)b=opts.fixed;
+  else if(!crop){const B=bounds();b={x0:Math.min(0,B.x0),y0:Math.min(0,B.y0),x1:Math.max(iw,B.x1),y1:Math.max(ih,B.y1)}}
+  const bw=b.x1-b.x0,bh=b.y1-b.y0,sc=maxSide/Math.max(bw,bh);
+  target.width=Math.round(bw*sc);target.height=Math.round(bh*sc);
+  const c=target.getContext('2d');const prev=ctxSwap(c);
+  c.setTransform(1,0,0,1,0,0);c.clearRect(0,0,target.width,target.height);
+  if(!trans){c.fillStyle='#fff';c.fillRect(0,0,target.width,target.height)}
+  c.setTransform(sc,0,0,sc,-b.x0*sc,-b.y0*sc);
+  if(photo){c.globalAlpha=.35;c.drawImage(S.img,0,0);c.globalAlpha=1}
+  LW=+$('lw').value/sc*(maxSide/1000);GUIDE=$('guide').checked;
+  drawFigure();
+  if(handles){const r=9/sc*(maxSide/1000)*1.4;S.pts.forEach((p,i)=>{if(!HANDLES.includes(i))return;
+    c.beginPath();c.arc(p.x,p.y,r,0,Math.PI*2);c.fillStyle=i===S.drag?'#e8452c':BLUE;c.globalAlpha=.85;c.fill();c.globalAlpha=1;c.lineWidth=r*.3;c.strokeStyle='#fff';c.stroke()})}
+  ctxSwap(prev);
+  return{sc,b};
+}
+function ctxSwap(c){const p=ctx;ctx=c;return p}
+function render(){
+  if(!S.pts)return;
+  S.bulk=+$('bulk').value;
+  S.view=compose(cv,{crop:$('crop').checked,trans:false,photo:$('photo').checked,handles:$('edit').checked,maxSide:1000,fixed:S.drag>-1&&S.view?S.view.b:null});
+}
+
+/* ---------- 編集（ドラッグ） ---------- */
+function toImg(e){const r=cv.getBoundingClientRect(),{sc,b}=S.view;
+  const x=(e.clientX-r.left)*cv.width/r.width,y=(e.clientY-r.top)*cv.height/r.height;return{x:x/sc+b.x0,y:y/sc+b.y0}}
+cv.addEventListener('pointerdown',e=>{
+  if(!$('edit').checked||!S.pts)return;
+  const p=toImg(e),r=cv.getBoundingClientRect(),tol=28*(cv.width/r.width)/S.view.sc;
+  let best=-1,bd=tol;HANDLES.forEach(i=>{const d=V.len(V.sub(S.pts[i],p));if(d<bd){bd=d;best=i}});
+  if(best>-1){S.drag=best;cv.setPointerCapture(e.pointerId);e.preventDefault();render()}
+});
+cv.addEventListener('pointermove',e=>{if(S.drag<0)return;const p=toImg(e);
+  S.pts[S.drag].x=p.x;S.pts[S.drag].y=p.y;render()});
+const end=()=>{if(S.drag>-1){S.drag=-1;render()}};
+cv.addEventListener('pointerup',end);cv.addEventListener('pointercancel',end);
+
+/* ---------- 保存 ---------- */
+function exportBlob(){
+  const c=document.createElement('canvas');
+  compose(c,{crop:$('crop').checked,trans:$('trans').checked,photo:false,handles:false,maxSide:2000});
+  render();
+  return new Promise(r=>c.toBlob(r,'image/png'));
+}
+async function savePNG(){
+  const blob=await exportBlob();const fn=S.name+'_pose.png';
+  if(downloads){
+    try{await downloads.save({filename:fn,data:blob});msg('保存しました：'+fn);return}
+    catch(e){if(e&&e.code==='declined'){msg('保存をキャンセルしました');return}}
+  }
+  if(!window.claude){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=fn;document.body.appendChild(a);a.click();a.remove();msg('保存しました：'+fn);return}
+  $('mimg').src=URL.createObjectURL(blob);$('modal').classList.add('on');
+}
+$('mclose').onclick=()=>$('modal').classList.remove('on');
+
+/* ---------- ギャラリー (IndexedDB) ---------- */
+let db=null;
+function openDB(){return new Promise(res=>{try{const r=indexedDB.open('pose-dolls',1);
+  r.onupgradeneeded=()=>r.result.createObjectStore('p',{keyPath:'id',autoIncrement:true});
+  r.onsuccess=()=>res(r.result);r.onerror=()=>res(null)}catch(e){res(null)}})}
+function tx(mode){return db.transaction('p',mode).objectStore('p')}
+async function listGal(){
+  if(!db)return;const all=await new Promise(r=>{const q=tx('readonly').getAll();q.onsuccess=()=>r(q.result);q.onerror=()=>r([])});
+  $('gal').innerHTML='';
+  all.reverse().forEach(it=>{const f=document.createElement('figure');const u=URL.createObjectURL(it.blob);
+    f.innerHTML=`<img alt="${it.name.replace(/[<>&"]/g,'')}" src="${u}"><button class="x" aria-label="削除">×</button>`;
+    f.querySelector('img').onclick=async()=>{if(downloads){try{await downloads.save({filename:it.name+'_pose.png',data:it.blob});return}catch(e){if(e&&e.code==='declined')return}}
+      $('mimg').src=u;$('modal').classList.add('on')};
+    f.querySelector('.x').onclick=()=>{tx('readwrite').delete(it.id).onsuccess=listGal};
+    $('gal').appendChild(f)});
+}
+$('keep').onclick=async()=>{
+  if(!db)return msg('この表示ではギャラリーを使えません。PNGで保存してください');
+  const blob=await exportBlob();tx('readwrite').add({name:S.name,blob,t:Date.now()}).onsuccess=()=>{listGal();msg('ギャラリーに追加しました（タップで保存できます）')};
+};
+
+/* ---------- UI ---------- */
+$('pick').onclick=$('pick2').onclick=()=>$('file').click();
+$('file').onchange=e=>{load(e.target.files[0]);e.target.value=''};
+$('save').onclick=savePNG;
+$('reset').onclick=()=>{if(S.orig){S.pts=S.orig.map(p=>({...p}));render()}};
+['edit','photo','guide','crop','lw','bulk'].forEach(i=>$(i).addEventListener('input',render));
+$('body').onclick=e=>{const b=e.target.closest('button');if(!b)return;S.body=b.dataset.v;
+  $('body').querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed',x===b));render()};
+const st=$('stage');
+st.addEventListener('dragover',e=>{e.preventDefault();st.classList.add('drop')});
+st.addEventListener('dragleave',()=>st.classList.remove('drop'));
+st.addEventListener('drop',e=>{e.preventDefault();st.classList.remove('drop');load(e.dataTransfer.files[0])});
+
+openDB().then(d=>{db=d;listGal()});
+if(window.claude&&claude.use)claude.use('downloads').then(d=>{downloads=d}).catch(()=>{});
+setTimeout(()=>{initPose().catch(()=>{})},400);
+}
+</script>
+</body>
+</html>
