@@ -57,6 +57,13 @@ label.c input{width:22px;height:22px;accent-color:var(--blue)}
 .modal img{max-width:100%;max-height:70vh;background:#fff;display:block;margin:0 auto 10px}
 .hint{font-size:13px;color:var(--mute)}
 @media(prefers-reduced-motion:no-preference){.stage canvas{animation:fade .35s ease}@keyframes fade{from{opacity:0;transform:scale(.985)}}}
+.ana{display:grid;grid-template-columns:5.2em minmax(0,1fr);gap:6px 10px;margin:0;font-size:14px;line-height:1.5}
+.ana dt{color:var(--mute)}.ana dd{margin:0}
+.ana dd b{font-weight:700}
+.ana .sub{display:block;color:var(--mute);font-size:13px}
+.ov{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;margin-top:12px}
+.ov label{display:grid;gap:2px;font-size:13px;color:var(--mute)}
+.note{font-size:13px;color:var(--mute);margin:10px 0 0}
 </style>
 </head>
 <body>
@@ -65,7 +72,7 @@ label.c input{width:22px;height:22px;accent-color:var(--blue)}
   <section class="stage" id="stage">
     <div class="empty" id="empty">
       <svg viewBox="0 0 120 160" fill="#fff" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><ellipse cx="60" cy="22" rx="14" ry="18"/><path d="M60 4v36M46 24q14 5 28 0" stroke="#3a7bd5" stroke-width="1.2" fill="none"/><path d="M40 48q20-8 40 0l-6 34q-14 5-28 0z"/><path d="M46 82q14 5 28 0l4 18q-18 10-36 0z"/><path d="M42 98l-8 54h10l10-50M78 98l8 54H76l-10-50"/><path d="M40 50l-14 44M80 50l14 44"/><circle cx="40" cy="50" r="7"/><circle cx="80" cy="50" r="7"/></svg>
-      <p style="margin:0 0 14px">全身が写った写真がいちばん正確です。<br>画像はこの端末内だけで処理されます。</p>
+      <p style="margin:0 0 14px">全身が写った写真がいちばん正確です。<br>手の指まで判定するには、手がはっきり写っている写真を使ってください。<br>画像はこの端末内だけで処理されます。</p>
       <button class="btn pri" id="pick2">写真を選ぶ</button>
     </div>
     <canvas id="cv" hidden></canvas>
@@ -77,6 +84,19 @@ label.c input{width:22px;height:22px;accent-color:var(--blue)}
       <input type="file" id="file" accept="image/*" hidden>
       <div class="row"><button class="btn pri" id="pick">写真を選ぶ</button><button class="btn blue" id="save" disabled>PNGで保存</button></div>
       <p class="msg" id="msg">写真を選ぶかここへドロップしてください</p>
+    </div>
+
+    <div class="card">
+      <h2>判定結果</h2>
+      <dl class="ana" id="ana"><dt>状態</dt><dd>写真を選ぶと表示されます</dd></dl>
+      <div class="ov">
+        <label>身体の表裏<select id="ovBody"><option value="auto">自動</option><option value="front">表（正面側）</option><option value="back">裏（背中側）</option></select></label>
+        <label>左手<select id="ovL"><option value="auto">自動</option><option value="palm">手の平</option><option value="back">手の甲</option><option value="side">側面</option></select></label>
+        <label>右手<select id="ovR"><option value="auto">自動</option><option value="palm">手の平</option><option value="back">手の甲</option><option value="side">側面</option></select></label>
+        <label>左足<select id="ovFL"><option value="auto">自動</option><option value="sole">足の裏</option><option value="top">足の甲</option><option value="side">側面</option></select></label>
+        <label>右足<select id="ovFR"><option value="auto">自動</option><option value="sole">足の裏</option><option value="top">足の甲</option><option value="side">側面</option></select></label>
+      </div>
+      <p class="note">左右は写っている本人から見た左右です。判定が違うときは上で切り替えると人形の描き方も変わります。</p>
     </div>
 
     <div class="card">
@@ -108,49 +128,66 @@ label.c input{width:22px;height:22px;accent-color:var(--blue)}
 
 <div class="modal" id="modal"><div><img id="mimg" alt="保存用の画像"><p class="hint">画像を長押し（右クリック）して保存してください</p><button class="btn" id="mclose">閉じる</button></div></div>
 
-<script src="pose.js"></script>
+<script src="holistic.js"></script>
 <script>
 {
 const $=id=>document.getElementById(id);
 const cv=$('cv');let ctx=cv.getContext('2d');
-const S={img:null,pts:null,orig:null,body:'n',drag:-1,view:null,name:'pose'};
+const S={img:null,pts:null,hands:{L:null,R:null},face:null,world:null,orig:null,body:'n',drag:-1,view:null,name:'pose',bulk:1};
 const INK='#18191b',BLUE='#3a7bd5';
-let pose=null,poseReady=null,resolver=null,downloads=null;
+let model=null,ready=null,resolver=null,downloads=null;
+if(location.search.includes('debug'))window.__S=S;
 
-/* ---------- 検出 ---------- */
-function initPose(){
-  if(poseReady)return poseReady;
-  pose=new Pose({locateFile:f=>f});
-  pose.setOptions({modelComplexity:1,smoothLandmarks:false,enableSegmentation:false,minDetectionConfidence:0.4,staticImageMode:true});
-  pose.onResults(r=>{if(resolver){resolver(r);resolver=null}});
-  poseReady=pose.initialize().then(()=>pose);
-  return poseReady;
+/* ---------- 検出（Holistic：全身33点＋両手21点＋顔468点） ---------- */
+function initModel(){
+  if(ready)return ready;
+  model=new Holistic({locateFile:f=>f});
+  model.setOptions({modelComplexity:1,smoothLandmarks:false,enableSegmentation:false,refineFaceLandmarks:false,minDetectionConfidence:0.4,minTrackingConfidence:0.4});
+  model.onResults(r=>{if(resolver){resolver(r);resolver=null}});
+  ready=model.initialize().then(()=>model);
+  return ready;
 }
 async function detect(img){
-  await initPose();
+  await initModel();
+  try{model.reset()}catch(e){}
   const c=document.createElement('canvas');
-  const k=Math.min(1,1280/Math.max(img.naturalWidth,img.naturalHeight));
+  const k=Math.min(1,1600/Math.max(img.naturalWidth,img.naturalHeight));
   c.width=Math.round(img.naturalWidth*k);c.height=Math.round(img.naturalHeight*k);
   c.getContext('2d').drawImage(img,0,0,c.width,c.height);
   const p=new Promise(r=>resolver=r);
-  await pose.send({image:c});
+  await model.send({image:c});
   return p;
 }
+const clone=o=>JSON.parse(JSON.stringify(o));
 async function load(file){
   if(!file||!file.type.startsWith('image/'))return msg('画像ファイルを選んでください');
   S.name=(file.name||'pose').replace(/\.[^.]+$/,'');
   const url=URL.createObjectURL(file);const img=new Image();
   img.onload=async()=>{
-    $('busy').classList.add('on');msg('解析中…（初回はモデル読み込みに少し時間がかかります）');
+    $('busy').classList.add('on');msg('解析中…（初回は解析データ約30MBの読み込みに時間がかかります）');
     try{
       const r=await detect(img);
       if(!r.poseLandmarks){msg('人物が見つかりませんでした。全身がはっきり写った写真でお試しください');$('busy').classList.remove('on');return}
+      const w=img.naturalWidth,h=img.naturalHeight;
+      const cvt=l=>({x:l.x*w,y:l.y*h,z:(l.z||0)*w,v:l.visibility??1});
+      const pose=r.poseLandmarks.map(cvt);
+      const wl=r.za||r.poseWorldLandmarks||null;
+      const hands={L:null,R:null};
+      const cands=[r.leftHandLandmarks,r.rightHandLandmarks].filter(x=>x&&x.length===21).map(x=>x.map(cvt));
+      const dist=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+      cands.sort((a,b)=>Math.min(dist(a[0],pose[15]),dist(a[0],pose[16]))-Math.min(dist(b[0],pose[15]),dist(b[0],pose[16])));
+      for(const hd of cands){
+        const pref=dist(hd[0],pose[15])<dist(hd[0],pose[16])?'L':'R';
+        const side=hands[pref]?(pref==='L'?'R':'L'):pref;
+        if(!hands[side])hands[side]=hd;
+      }
       S.img=img;
-      S.orig=r.poseLandmarks.map(l=>({x:l.x*img.naturalWidth,y:l.y*img.naturalHeight,z:l.z*img.naturalWidth,v:l.visibility??1}));
-      S.pts=S.orig.map(p=>({...p}));
+      S.orig={pts:pose,hands,face:r.faceLandmarks?r.faceLandmarks.map(cvt):null,world:wl?wl.map(l=>({x:l.x,y:l.y,z:l.z,v:l.visibility??1})):null};
+      Object.assign(S,clone(S.orig));
       $('empty').hidden=true;cv.hidden=false;['save','keep','reset'].forEach(i=>$(i).disabled=false);
       const low=[25,26,27,28].filter(i=>S.pts[i].v<0.5).length;
-      msg(low?'脚が写っていない部分は推定で描いています。ずれは「関節の修正」で直せます':'完成しました。ずれている関節はドラッグで直せます');
+      const nh=(hands.L?1:0)+(hands.R?1:0);
+      msg((low?'脚が写っていない部分は推定で描いています。':'完成しました。')+(nh===0?'手の指は検出できませんでした。':nh===1?'指まで検出できたのは片手だけです。':'')+'ずれはドラッグで直せます');
       render();
     }catch(e){console.error(e);msg('解析に失敗しました：'+(e.message||e))}
     $('busy').classList.remove('on');
@@ -160,15 +197,99 @@ async function load(file){
 }
 function msg(t){$('msg').textContent=t}
 
-/* ---------- 幾何 ---------- */
+/* ---------- ベクトル ---------- */
 const V={add:(a,b)=>({x:a.x+b.x,y:a.y+b.y}),sub:(a,b)=>({x:a.x-b.x,y:a.y-b.y}),mul:(a,k)=>({x:a.x*k,y:a.y*k}),len:a=>Math.hypot(a.x,a.y),
   mid:(a,b)=>({x:(a.x+b.x)/2,y:(a.y+b.y)/2}),lerp:(a,b,t)=>({x:a.x+(b.x-a.x)*t,y:a.y+(b.y-a.y)*t}),
   norm:a=>{const l=Math.hypot(a.x,a.y)||1;return{x:a.x/l,y:a.y/l}},perp:a=>({x:-a.y,y:a.x}),dot:(a,b)=>a.x*b.x+a.y*b.y};
+const V3={sub:(a,b)=>({x:a.x-b.x,y:a.y-b.y,z:a.z-b.z}),add:(a,b)=>({x:a.x+b.x,y:a.y+b.y,z:a.z+b.z}),mul:(a,k)=>({x:a.x*k,y:a.y*k,z:a.z*k}),
+  dot:(a,b)=>a.x*b.x+a.y*b.y+a.z*b.z,len:a=>Math.hypot(a.x,a.y,a.z),mid:(a,b)=>({x:(a.x+b.x)/2,y:(a.y+b.y)/2,z:(a.z+b.z)/2}),
+  norm:a=>{const l=Math.hypot(a.x,a.y,a.z)||1;return{x:a.x/l,y:a.y/l,z:a.z/l}},
+  cross:(a,b)=>({x:a.y*b.z-a.z*b.y,y:a.z*b.x-a.x*b.z,z:a.x*b.y-a.y*b.x}),
+  ang:(a,b)=>Math.acos(Math.max(-1,Math.min(1,V3.dot(V3.norm(a),V3.norm(b)))))*180/Math.PI};
+const R=Math.round;
 
-function frame(){
-  const P=S.pts,N=V.mid(P[11],P[12]),C=V.mid(P[23],P[24]);
-  const T=Math.max(V.len(V.sub(C,N)),V.len(V.sub(P[11],P[12]))*1.1,20);
-  return{N,C,T};
+/* ---------- 判定 ---------- */
+const FINGERS=[[1,2,3,4],[5,6,7,8],[9,10,11,12],[13,14,15,16],[17,18,19,20]];
+const FN=['親','人','中','薬','小'];
+function yawOf(a,b){const W=S.world||S.pts;const dx=W[a].x-W[b].x,dz=W[a].z-W[b].z;return Math.atan2(-dz,dx)*180/Math.PI}
+function analyzeHand(side){
+  const H=S.hands[side];if(!H)return null;
+  const a=V3.sub(H[5],H[0]),b=V3.sub(H[17],H[0]);
+  const cr=a.x*b.y-a.y*b.x, s=cr/((Math.hypot(a.x,a.y)*Math.hypot(b.x,b.y))||1);
+  // 本人の右手は外積が負のとき手の平がカメラ側。左手は逆。
+  const sg=side==='R'?-1:1;
+  let face=s*sg>0.28?'palm':s*sg<-0.28?'back':'side';
+  let edge='';
+  if(face==='side')edge=H[4].z<H[20].z?'親指側が手前':'小指側が手前';
+  const dir=f=>V3.sub(H[f[3]],H[f[0]===1?2:f[0]]);
+  const gaps=[];for(let i=0;i<4;i++)gaps.push(V3.ang(dir(FINGERS[i]),dir(FINGERS[i+1])));
+  const spread=(gaps[1]+gaps[2]+gaps[3])/3;
+  const curl=FINGERS.map(f=>{const s1=V3.ang(V3.sub(H[f[1]],H[f[0]]),V3.sub(H[f[2]],H[f[1]])),s2=V3.ang(V3.sub(H[f[2]],H[f[1]]),V3.sub(H[f[3]],H[f[2]]));
+    const base=f[0]===1?0:V3.ang(V3.sub(H[f[0]],H[0]),V3.sub(H[f[1]],H[f[0]]));return s1+s2+base});
+  const st=curl.map((c,i)=>i===0?(c<45?0:c<90?1:2):(c<55?0:c<130?1:2));
+  const sp=spread<9?'閉じている':spread<18?'少し開いている':'大きく開いている';
+  let shape='';
+  const ext=st.map(x=>x===0);
+  if(st.slice(1).every(x=>x===2))shape=ext[0]?'親指を立てた握り':'握りこぶし（グー）';
+  else if(st.every(x=>x===0))shape=spread>=15?'パー（指を広げる）':'指をそろえて伸ばす';
+  else if(ext[1]&&!ext[2]&&!ext[3]&&!ext[4])shape='指差し';
+  else if(ext[1]&&ext[2]&&!ext[3]&&!ext[4])shape='ピース（チョキ）';
+  else if(st.every(x=>x===1))shape='軽く曲げた自然な手';
+  return{face,edge,spread,gaps,thumb:gaps[0],curl,st,sp,shape};
+}
+function analyzeFoot(side){
+  const W=S.world||S.pts;const [k,a,h,t]=side==='L'?[25,27,29,31]:[26,28,30,32];
+  const f=V3.sub(W[t],W[h]),shin=V3.sub(W[k],W[a]);
+  const ang=V3.ang(shin,f);
+  const fl=ang-90;
+  const ankle=Math.abs(fl)<10?'ほぼ直角（自然な角度）':fl>0?`底屈 約${R(fl)}°（つま先が伸びる）`:`背屈 約${R(-fl)}°（つま先が上がる）`;
+  const fn=V3.norm(f),u=V3.sub(W[a],V3.mid(W[h],W[t]));
+  const nrm=V3.norm(V3.mul(V3.sub(u,V3.mul(fn,V3.dot(u,fn))),-1));
+  const vis=nrm.z<-0.35?'sole':nrm.z>0.45?'top':'side';
+  const toe=fn.z<-0.5?'つま先が手前（こちら向き）':fn.z>0.5?'つま先が奥':(fn.x<0?'つま先が画面左':'つま先が画面右');
+  const seen=Math.min(S.pts[a].v,S.pts[t].v)>=0.5;
+  return{ang,ankle,vis,toe,seen};
+}
+function analyze(){
+  const A={};
+  const ys=yawOf(11,12),yh=yawOf(23,24);
+  const faceSeen=!!S.face;
+  A.backAuto=(!faceSeen&&S.pts[0].v<0.8)||Math.abs(ys)>140;
+  const ay=Math.abs(ys),dirTxt=ys>0?'画面左':'画面右';
+  A.bodyTxt=A.backAuto?(ay<120&&ay>60?'横向き（背中寄り）':'背面（背中側が見える）'):ay<25?'正面':ay<65?`斜め前（${dirTxt}寄りを向く）`:`横向き（${dirTxt}を向く）`;
+  A.bodyDeg=R(ay);
+  let tw=ys-yh;tw=((tw+540)%360)-180;
+  A.twist=Math.abs(tw)<12?'ほぼなし':`上半身が腰より${tw>0?'画面左':'画面右'}へ約${R(Math.abs(tw))}°ひねり`;
+  const sp=V.sub(V.mid(S.pts[11],S.pts[12]),V.mid(S.pts[23],S.pts[24]));
+  const lean=Math.atan2(sp.x,-sp.y)*180/Math.PI;
+  A.lean=Math.abs(lean)<6?'まっすぐ':`${lean>0?'画面右':'画面左'}へ約${R(Math.abs(lean))}°傾く`;
+  if(S.face){
+    const F=S.face,side=V.sub(F[454],F[234]),hw=V.len(side)/2||1,c=V.mid(F[234],F[454]);
+    const f=V.dot(V.sub(F[1],c),V.norm(side))/hw;
+    const roll=Math.atan2(F[263].y-F[33].y,F[263].x-F[33].x)*180/Math.PI;
+    A.head=(Math.abs(f)<0.18?'顔は正面':Math.abs(f)<0.55?`顔はやや${f>0?'画面右':'画面左'}向き`:`横顔（${f>0?'画面右':'画面左'}向き）`)+(Math.abs(roll)>8?`・首を約${R(Math.abs(roll))}°かしげる`:'');
+  }else A.head=A.backAuto?'後頭部（顔は見えない）':'顔を検出できず';
+  A.hand={L:analyzeHand('L'),R:analyzeHand('R')};
+  A.foot={L:analyzeFoot('L'),R:analyzeFoot('R')};
+  return A;
+}
+const ov=id=>$(id).value;
+function eff(A){
+  const b=ov('ovBody');
+  return{back:b==='auto'?A.backAuto:b==='back',
+    hand:{L:ov('ovL')==='auto'?(A.hand.L?A.hand.L.face:null):ov('ovL'),R:ov('ovR')==='auto'?(A.hand.R?A.hand.R.face:null):ov('ovR')},
+    foot:{L:ov('ovFL')==='auto'?A.foot.L.vis:ov('ovFL'),R:ov('ovFR')==='auto'?A.foot.R.vis:ov('ovFR')}};
+}
+const esc=s=>String(s).replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+function showAna(A){
+  const FACE={palm:'手の平が見える',back:'手の甲が見える',side:'側面'};
+  const FOOT={sole:'足の裏が見える',top:'足の甲が見える',side:'足の側面が見える'};
+  const MARK=['伸','曲','握'];
+  const hand=s=>{const h=A.hand[s];if(!h)return'<b>検出できず</b><span class="sub">手が小さい・隠れている・ブレている可能性</span>';
+    return`<b>${FACE[h.face]}${h.edge?'（'+h.edge+'）':''}</b><span class="sub">形：${h.shape||'—'}</span><span class="sub">指の開き：${h.sp}（平均${R(h.spread)}°・親指と人差し指${R(h.thumb)}°）</span><span class="sub">曲げ：${h.st.map((x,i)=>FN[i]+MARK[x]).join(' ')}</span>`};
+  const foot=s=>{const f=A.foot[s];return`<b>${FOOT[f.vis]}</b><span class="sub">足首：${f.ankle}</span><span class="sub">${f.toe}${f.seen?'':'（写っていないため推定）'}</span>`};
+  $('ana').innerHTML=[['身体',`<b>${A.bodyTxt}</b><span class="sub">回転 約${A.bodyDeg}°</span>`],['ねじれ',A.twist],['上体',A.lean],['頭',A.head],['左手',hand('L')],['右手',hand('R')],['左足',foot('L')],['右足',foot('R')]]
+    .map(([k,v])=>`<dt>${k}</dt><dd>${v}</dd>`).join('');
 }
 
 /* ---------- 描画パーツ ---------- */
@@ -176,9 +297,11 @@ let LW=2.5,GUIDE=true;
 function shape(path,guide){
   ctx.fillStyle='#fff';ctx.strokeStyle=INK;ctx.lineWidth=LW;ctx.lineJoin='round';ctx.lineCap='round';
   ctx.beginPath();path();ctx.fill();ctx.stroke();
-  if(GUIDE&&guide){ctx.save();ctx.strokeStyle=BLUE;ctx.globalAlpha=.75;ctx.lineWidth=Math.max(1,LW*.45);ctx.beginPath();guide();ctx.stroke();ctx.restore()}
+  if(GUIDE&&guide){ctx.save();ctx.strokeStyle=BLUE;ctx.globalAlpha=.75;ctx.lineWidth=Math.max(LW*.2,LW*.45);ctx.beginPath();guide();ctx.stroke();ctx.restore()}
 }
-function limb(A,B,ra,rb,bulge=1.05,tm=.4){
+function lines(path,w=.9){ctx.save();ctx.strokeStyle=INK;ctx.lineWidth=LW*w;ctx.lineCap='round';ctx.beginPath();path();ctx.stroke();ctx.restore()}
+function guides(path){if(!GUIDE)return;ctx.save();ctx.strokeStyle=BLUE;ctx.globalAlpha=.75;ctx.lineWidth=LW*.45;ctx.lineCap='round';ctx.beginPath();path();ctx.stroke();ctx.restore()}
+function limb(A,B,ra,rb,bulge=1.05,tm=.4,g=true){
   const d=V.norm(V.sub(B,A)),n=V.perp(d),L=V.len(V.sub(B,A));
   const M=V.lerp(A,B,tm),rm=Math.max(ra,rb)*bulge;
   const a1=V.add(A,V.mul(n,ra)),m1=V.add(M,V.mul(n,rm)),b1=V.add(B,V.mul(n,rb));
@@ -190,7 +313,7 @@ function limb(A,B,ra,rb,bulge=1.05,tm=.4){
     ctx.arc(B.x,B.y,rb,ang,ang-Math.PI,true);
     const c2=V.sub(V.mul(m2,2),V.mid(a2,b2));ctx.quadraticCurveTo(c2.x,c2.y,a2.x,a2.y);
     ctx.arc(A.x,A.y,ra,ang+Math.PI,ang,true);ctx.closePath();
-  },L>rm*1.5?()=>{
+  },g&&L>rm*1.5?()=>{
     const e=V.lerp(A,B,.15),f=V.lerp(A,B,.85);ctx.moveTo(e.x,e.y);ctx.lineTo(f.x,f.y);
     const X=V.lerp(A,B,.55),r=(ra+rb)/2*1.02;
     ctx.moveTo(X.x+n.x*r,X.y+n.y*r);
@@ -198,8 +321,13 @@ function limb(A,B,ra,rb,bulge=1.05,tm=.4){
   }:null);
 }
 function ball(P,r){shape(()=>{ctx.moveTo(P.x+r,P.y);ctx.arc(P.x,P.y,r,0,Math.PI*2)})}
+function smoothClosed(pts){
+  const n=pts.length;const m0=V.mid(pts[n-1],pts[0]);ctx.moveTo(m0.x,m0.y);
+  for(let i=0;i<n;i++){const p=pts[i],m=V.mid(p,pts[(i+1)%n]);ctx.quadraticCurveTo(p.x,p.y,m.x,m.y)}
+  ctx.closePath();
+}
 
-function torso(F){
+function torso(F,back){
   const P=S.pts,{N,C,T}=F,k=S.bulk;
   const v=V.norm(V.sub(C,N));let s=V.perp(v);
   if(V.dot(s,V.sub(P[11],P[12]))<0)s=V.mul(s,-1);
@@ -213,7 +341,6 @@ function torso(F){
   const WLc=V.lerp(WL,WM,.12),WRc=V.lerp(WR,WM,.12);
   const CR=V.add(C,V.mul(v,T*.24));
   const down=V.mul(v,T*.06);
-  // 骨盤
   shape(()=>{
     ctx.moveTo(WLc.x,WLc.y);
     const o1=V.add(V.lerp(WLc,LH,.55),V.mul(s,T*.05));ctx.quadraticCurveTo(o1.x,o1.y,LH.x,LH.y);
@@ -221,12 +348,15 @@ function torso(F){
     const q2=V.add(V.lerp(RH,CR,.5),V.mul(v,T*.08));ctx.quadraticCurveTo(q2.x,q2.y,RH.x,RH.y);
     const o2=V.add(V.lerp(WRc,RH,.55),V.mul(s,-T*.05));ctx.quadraticCurveTo(o2.x,o2.y,WRc.x,WRc.y);
     ctx.closePath();
-  },()=>{
+  },back?()=>{
+    ctx.moveTo(WM.x,WM.y);ctx.lineTo(CR.x,CR.y);
+    for(const sg of[1,-1]){const a=V.add(V.lerp(C,CR,.7),V.mul(s,sg*T*.03)),b=V.add(V.lerp(C,sg>0?LH:RH,.75),V.mul(v,T*.16)),c=V.add(V.lerp(a,b,.5),V.mul(v,T*.08));
+      ctx.moveTo(a.x,a.y);ctx.quadraticCurveTo(c.x,c.y,b.x,b.y)}
+  }:()=>{
     const a=V.lerp(LH,RH,.08),b=V.lerp(LH,RH,.92),c=V.add(V.mid(a,b),V.mul(v,T*.12));
     ctx.moveTo(a.x,a.y);ctx.quadraticCurveTo(c.x,c.y,b.x,b.y);
     ctx.moveTo(WM.x,WM.y);ctx.lineTo(CR.x,CR.y);
   });
-  // 胸郭
   const NB=V.sub(N,V.mul(v,T*.04));
   shape(()=>{
     ctx.moveTo(LS.x,LS.y);
@@ -234,82 +364,175 @@ function torso(F){
     const b=V.add(WM,down);ctx.quadraticCurveTo(b.x,b.y,WRc.x,WRc.y);
     const o2=V.add(V.lerp(RS,WRc,.45),V.mul(s,-T*.04));ctx.quadraticCurveTo(o2.x,o2.y,RS.x,RS.y);
     ctx.quadraticCurveTo(NB.x,NB.y,LS.x,LS.y);ctx.closePath();
-  },()=>{
+  },back?()=>{
+    ctx.moveTo(N.x,N.y);ctx.lineTo(WM.x,WM.y);
+    for(const sg of[1,-1]){const c=V.add(V.lerp(N,WM,.32),V.mul(s,sg*shMin*.9)),a=Math.atan2(-s.y*sg,-s.x*sg);
+      const r=T*.2;ctx.moveTo(c.x+Math.cos(a-.75)*r,c.y+Math.sin(a-.75)*r);ctx.arc(c.x,c.y,r,a-.75,a+.75)}
+  }:()=>{
     ctx.moveTo(N.x,N.y);const m=V.add(V.lerp(N,WM,.5),V.mul(s,T*.01));ctx.quadraticCurveTo(m.x,m.y,WM.x,WM.y);
     const y=V.lerp(N,WM,.55),a=V.lerp(V.lerp(LS,WLc,.55),y,.1),bb=V.lerp(V.lerp(RS,WRc,.55),y,.1),c=V.add(y,V.mul(v,T*.07));
     ctx.moveTo(a.x,a.y);ctx.quadraticCurveTo(c.x,c.y,bb.x,bb.y);
   });
-  if(bt==='f'){
+  if(bt==='f'&&!back){
     const y=V.lerp(N,WM,.4),r=T*.12*k;
-    ctx.save();ctx.strokeStyle=INK;ctx.lineWidth=LW*.9;
-    for(const sg of[1,-1]){const c=V.add(y,V.mul(s,sg*shMin*.5));const a=Math.atan2(v.y,v.x);
-      ctx.beginPath();ctx.arc(c.x,c.y,r,a-1.25,a+1.25);ctx.stroke()}
-    ctx.restore();
+    lines(()=>{for(const sg of[1,-1]){const c=V.add(y,V.mul(s,sg*shMin*.5));const a=Math.atan2(v.y,v.x);
+      ctx.moveTo(c.x+Math.cos(a-1.25)*r,c.y+Math.sin(a-1.25)*r);ctx.arc(c.x,c.y,r,a-1.25,a+1.25)}});
   }
-  return{LS,RS,s,v};
+  return{s,v};
 }
 
-function head(F,s){
-  const P=S.pts,{N,T}=F;
-  const ear=V.mid(P[7],P[8]);
-  let up=V.norm(V.sub(ear,N));
-  const H=T*.52,W=H*.76;
-  const c=V.add(ear,V.mul(up,H*.08));
-  const side=V.perp(up);const sgn=V.dot(side,s)<0?-1:1;
-  const f=Math.max(-.92,Math.min(.92,V.dot(V.sub(P[0],ear),side)/(W*.5)*1.4));
+function head(F,s,back){
+  const P=S.pts,{N,T}=F,Fc=S.face;
+  let up,c,H,W,f,eyeOff;
+  if(Fc&&!back){
+    up=V.norm(V.sub(Fc[10],Fc[152]));
+    const fh=V.len(V.sub(Fc[10],Fc[152]));
+    H=Math.max(T*.4,Math.min(T*.66,fh*1.5));W=H*.78;
+    c=V.add(V.mid(Fc[10],Fc[152]),V.mul(up,H*.1));
+    const side=V.norm(V.sub(Fc[454],Fc[234])),hw=V.len(V.sub(Fc[454],Fc[234]))/2||1;
+    f=V.dot(V.sub(Fc[1],V.mid(Fc[234],Fc[454])),side)/hw;
+    const sd=V.perp(up);f*=Math.sign(V.dot(sd,side))||1;
+    eyeOff=-V.dot(V.sub(V.mid(Fc[33],Fc[263]),c),up);
+  }else{
+    const ear=V.mid(P[7],P[8]);
+    up=V.norm(V.sub(ear,N));H=T*.52;W=H*.76;
+    c=V.add(ear,V.mul(up,H*.08));
+    const sd=V.perp(up);f=V.dot(V.sub(P[0],ear),sd)/(W*.5)*1.4;eyeOff=H*.06;
+  }
+  f=Math.max(-.95,Math.min(.95,f));
   const rot=Math.atan2(up.y,up.x)+Math.PI/2;
-  // 首
   const chin=V.sub(c,V.mul(up,H*.3));
-  limb(V.add(N,V.mul(up,-T*.02)),chin,T*.1,T*.08,1,.5);
+  limb(V.add(N,V.mul(up,-T*.02)),chin,T*.1,T*.08,1,.5,false);
   shape(()=>{ctx.ellipse(c.x,c.y,W/2,H/2,rot,0,Math.PI*2)},()=>{
-    const rx=Math.abs(f)*W/2;
     ctx.save();ctx.translate(c.x,c.y);ctx.rotate(rot);
-    if(rx<2){ctx.moveTo(0,-H/2);ctx.lineTo(0,H/2)}
-    else{const fs=V.dot(V.sub(P[0],ear),side)>0?1:-1;ctx.moveTo(0,-H/2);ctx.ellipse(0,0,rx,H/2,0,-Math.PI/2,Math.PI/2,fs<0)}
-    const ey=H*.06;ctx.moveTo(-W/2,ey);ctx.ellipse(0,ey,W/2,H*.07,0,Math.PI,0,true);
+    if(back){ctx.moveTo(0,-H/2);ctx.lineTo(0,H/2);ctx.moveTo(-W*.42,H*.12);ctx.quadraticCurveTo(0,H*.26,W*.42,H*.12)}
+    else{
+      const rx=Math.abs(f)*W/2;
+      if(rx<2){ctx.moveTo(0,-H/2);ctx.lineTo(0,H/2)}
+      else{ctx.moveTo(0,-H/2);ctx.ellipse(0,0,rx,H/2,0,-Math.PI/2,Math.PI/2,f<0)}
+      const ey=eyeOff;ctx.moveTo(-W/2*Math.sqrt(Math.max(0,1-(2*ey/H)**2)),ey);
+      ctx.ellipse(0,ey,W/2*Math.sqrt(Math.max(0,1-(2*ey/H)**2)),H*.07,0,Math.PI,0,true);
+    }
     ctx.restore();
   });
 }
 
-function hand(W,I,Pk,T){
+/* 手：21点がある場合は指まで描く */
+function handDetailed(H,face,T,k){
+  const fr=T*.026*k;
+  const R0=[1.25,1,1.04,.96,.82];
+  const tip=[.62,.7,.7,.68,.66];
+  const dir=V.norm(V.sub(H[9],H[0]));const nn=V.perp(dir);
+  const thumbSide=V.dot(V.sub(H[1],H[0]),nn)>0?1:-1;
+  const ww=V.len(V.sub(H[5],H[17]))*.42;
+  const W1=V.add(H[0],V.mul(nn,thumbSide*ww)),W2=V.add(H[0],V.mul(nn,-thumbSide*ww));
+  const items=[];
+  const zf=f=>f.reduce((s,i)=>s+H[i].z,0)/f.length;
+  const palmZ=(H[0].z+H[5].z+H[9].z+H[17].z)/4;
+  items.push({z:palmZ,f:()=>{
+    shape(()=>smoothClosed([W1,H[1],V.lerp(H[1],H[5],.5),H[5],H[9],H[13],H[17],V.lerp(H[17],W2,.5),W2]),
+      face==='palm'?()=>{
+        const a=V.lerp(H[17],H[0],.28),b=V.lerp(H[5],H[0],.3),c=V.lerp(V.mid(a,b),H[9],.25);
+        ctx.moveTo(a.x,a.y);ctx.quadraticCurveTo(c.x,c.y,b.x,b.y);
+        const d=V.lerp(H[5],H[0],.45),e=V.lerp(H[0],H[17],.15),g=V.lerp(V.lerp(H[1],H[2],.5),H[0],.35);
+        ctx.moveTo(d.x,d.y);ctx.quadraticCurveTo(g.x,g.y,e.x,e.y);
+      }:face==='back'?()=>{
+        ctx.moveTo(H[0].x,H[0].y);ctx.lineTo(H[9].x,H[9].y);
+        for(const i of[5,9,13,17]){const p=H[i];ctx.moveTo(p.x+fr*.7,p.y);ctx.arc(p.x,p.y,fr*.7,0,Math.PI*2)}
+      }:null);
+  }});
+  FINGERS.forEach((f,fi)=>{
+    items.push({z:zf(f.slice(1)),f:()=>{
+      const r=fr*R0[fi];
+      const segs=fi===0?[[1,2],[2,3],[3,4]]:[[f[0],f[1]],[f[1],f[2]],[f[2],f[3]]];
+      segs.forEach(([a,b],si)=>{
+        const ra=r*(1-si*.1),rb=si===2?r*tip[fi]:r*(.95-si*.1);
+        limb(H[a],H[b],ra,rb,1.02,.5,false);
+      });
+      if(face==='palm'&&fi>0)guides(()=>{for(const j of[1,2]){const p=H[f[j]],q=V.norm(V.perp(V.sub(H[f[j+1]],p)));ctx.moveTo(p.x+q.x*r*.8,p.y+q.y*r*.8);ctx.lineTo(p.x-q.x*r*.8,p.y-q.y*r*.8)}});
+      if(face==='back'&&fi>0)guides(()=>{const e=f[3],p=H[e],q=V.norm(V.sub(H[f[2]],p));const m=V.add(p,V.mul(q,r*.9));ctx.moveTo(m.x+q.y*r*.4,m.y-q.x*r*.4);ctx.quadraticCurveTo(...[V.add(p,V.mul(q,r*.3))].flatMap(o=>[o.x,o.y]),m.x-q.y*r*.4,m.y+q.x*r*.4)});
+    }});
+  });
+  items.sort((a,b)=>b.z-a.z).forEach(it=>it.f());
+}
+function handSimple(W,I,Pk,T){
   const tip=V.mid(I,Pk);const d=V.norm(V.sub(tip,W));const L=Math.max(V.len(V.sub(tip,W))*1.5,T*.17);
   limb(W,V.add(W,V.mul(d,L)),T*.045,T*.05,1.15,.6);
 }
-function foot(A,Hl,Toe,T){
-  const r=T*.05;
-  const heel=V.lerp(A,Hl,.9),toe=Toe;
-  limb(heel,toe,r,r*.85,1.1,.5);
-  ball(A,T*.052);
+
+/* 足：足の裏・甲・側面で描き分け */
+function foot(A,Hl,Toe,T,mode){
+  const r=T*.06;
+  const heel=V.lerp(A,Hl,.9),L=V.len(V.sub(Toe,heel));
+  const d=V.norm(V.sub(Toe,heel)),n=V.perp(d);
+  const draw=()=>{
+    if(L<r*1.6){
+      const c=V.lerp(heel,Toe,.5);
+      shape(()=>{ctx.ellipse(c.x,c.y,r*1.25,r*1.55,Math.atan2(d.y,d.x)+Math.PI/2,0,Math.PI*2)},null);
+      if(mode==='sole')lines(()=>{for(let i=-2;i<=2;i++){const p=V.add(c,V.add(V.mul(n,i*r*.42),V.mul(d,r*.9)));ctx.moveTo(p.x+r*.18,p.y);ctx.arc(p.x,p.y,r*.18,0,Math.PI*2)}},.6);
+      return;
+    }
+    const wide=mode==='sole'?1.4:mode==='top'?1.3:1.1;
+    limb(heel,Toe,r*.95,r*.9,wide,.7,false);
+    const M=V.lerp(heel,Toe,.76),w=r*wide*.92;
+    if(mode==='sole'){
+      guides(()=>{ctx.moveTo(heel.x,heel.y);ctx.lineTo(M.x,M.y);
+        const a=V.add(M,V.mul(n,w)),b=V.sub(M,V.mul(n,w)),c=V.add(M,V.mul(d,-r*.35));ctx.moveTo(a.x,a.y);ctx.quadraticCurveTo(c.x,c.y,b.x,b.y)});
+      lines(()=>{for(let i=-2;i<=2;i++){const t=i/2.4,p=V.add(V.lerp(M,Toe,.62),V.add(V.mul(n,t*w*.85),V.mul(d,-Math.abs(t)*r*.35)));const rr=r*(i===(n.x>0?2:-2)?.26:.18);
+        ctx.moveTo(p.x+rr,p.y);ctx.arc(p.x,p.y,rr,0,Math.PI*2)}},.6);
+    }else if(mode==='top'){
+      guides(()=>{const a=V.add(M,V.mul(n,w)),b=V.sub(M,V.mul(n,w)),c=V.add(M,V.mul(d,r*.3));ctx.moveTo(a.x,a.y);ctx.quadraticCurveTo(c.x,c.y,b.x,b.y)});
+      lines(()=>{for(let i=-1;i<=2;i++){const t=(i-.5)/2.6,p=V.add(M,V.mul(n,t*w*1.1)),q=V.add(V.lerp(M,Toe,.75),V.mul(n,t*w*.9));
+        const s=V.add(p,V.mul(d,r*.25));ctx.moveTo(s.x,s.y);ctx.lineTo(q.x,q.y)}},.55);
+    }else{
+      guides(()=>{const a=V.lerp(heel,Toe,.3),b=V.lerp(heel,Toe,.72),c=V.add(V.mid(a,b),V.mul(n,-r*.5));ctx.moveTo(a.x,a.y);ctx.quadraticCurveTo(c.x,c.y,b.x,b.y)});
+    }
+  };
+  if(mode==='sole'){ball(A,T*.052);draw()}else{draw();ball(A,T*.052)}
 }
 
-function drawFigure(){
+function frame(){
+  const P=S.pts,N=V.mid(P[11],P[12]),C=V.mid(P[23],P[24]);
+  const T=Math.max(V.len(V.sub(C,N)),V.len(V.sub(P[11],P[12]))*1.1,20);
+  return{N,C,T};
+}
+function drawFigure(E){
   const P=S.pts,F=frame(),T=F.T,k=S.bulk;
   const z=i=>P[i].z;
   const parts=[];
-  for(const [sh,el,wr,ix,pk,sg] of [[11,13,15,19,17,1],[12,14,16,20,18,-1]]){
+  for(const [sh,el,wr,ix,pk,side] of [[11,13,15,19,17,'L'],[12,14,16,20,18,'R']]){
     parts.push({z:(z(sh)+z(el))/2,f:()=>{limb(P[sh],P[el],T*.095*k,T*.068*k);ball(P[sh],T*.105*k);ball(P[el],T*.06*k)}});
-    parts.push({z:(z(el)+z(wr))/2,f:()=>{limb(P[el],P[wr],T*.066*k,T*.045*k);hand(P[wr],P[ix],P[pk],T*k);ball(P[wr],T*.042*k)}});
+    parts.push({z:(z(el)+z(wr))/2,f:()=>{limb(P[el],P[wr],T*.066*k,T*.045*k);
+      const H=S.hands[side];
+      if(H){const r=T*.042*k;ball(P[wr],r);handDetailed(H,E.hand[side]||'side',T,k)}
+      else{handSimple(P[wr],P[ix],P[pk],T*k);ball(P[wr],T*.042*k)}}});
   }
-  for(const [hp,kn,an,hl,to] of [[23,25,27,29,31],[24,26,28,30,32]]){
+  for(const [hp,kn,an,hl,to,side] of [[23,25,27,29,31,'L'],[24,26,28,30,32,'R']]){
     parts.push({z:(z(hp)+z(kn))/2,f:()=>{limb(P[hp],P[kn],T*.16*k,T*.095*k,1.08,.3);ball(P[kn],T*.09*k)}});
-    parts.push({z:(z(kn)+z(an))/2,f:()=>{limb(P[kn],P[an],T*.092*k,T*.058*k,1.1,.3);foot(P[an],P[hl],P[to],T*k);ball(P[kn],T*.09*k)}});
+    parts.push({z:(z(kn)+z(an))/2,f:()=>{
+      const mode=E.foot[side];
+      if(mode==='sole'){foot(P[an],P[hl],P[to],T*k,mode);limb(P[kn],P[an],T*.092*k,T*.058*k,1.1,.3);}
+      else{limb(P[kn],P[an],T*.092*k,T*.058*k,1.1,.3);foot(P[an],P[hl],P[to],T*k,mode)}
+      ball(P[kn],T*.09*k)}});
   }
   const tz=(z(11)+z(12)+z(23)+z(24))/4;
   let tor=null;
-  parts.push({z:tz,f:()=>{tor=torso(F)}});
+  parts.push({z:tz,f:()=>{tor=torso(F,E.back)}});
   parts.push({z:tz-1e-4,f:()=>{ball(P[11],T*.105*k);ball(P[12],T*.105*k)}});
-  parts.push({z:Math.min(tz,z(0))-1e-3,f:()=>head(F,tor?tor.s:V.perp(V.norm(V.sub(F.C,F.N))))});
+  parts.push({z:Math.min(tz,z(0))-1e-3,f:()=>head(F,tor?tor.s:V.perp(V.norm(V.sub(F.C,F.N))),E.back)});
   parts.sort((a,b)=>b.z-a.z);
   parts.forEach(p=>p.f());
 }
 
 /* ---------- レンダリング ---------- */
 const HANDLES=[0,7,8,11,12,13,14,15,16,17,18,19,20,23,24,25,26,27,28,29,30,31,32];
+function allPts(){const a=[...S.pts];for(const s of['L','R'])if(S.hands[s])a.push(...S.hands[s]);return a}
 function bounds(){
-  const P=S.pts,{T}=frame();let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
-  P.forEach(p=>{x0=Math.min(x0,p.x);y0=Math.min(y0,p.y);x1=Math.max(x1,p.x);y1=Math.max(y1,p.y)});
+  const {T}=frame();let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  allPts().forEach(p=>{x0=Math.min(x0,p.x);y0=Math.min(y0,p.y);x1=Math.max(x1,p.x);y1=Math.max(y1,p.y)});
   const m=T*.45;return{x0:x0-m,y0:y0-m*1.1,x1:x1+m,y1:y1+m*.6};
 }
+let lastE=null;
 function compose(target,opts){
   const {crop,trans,photo,handles,maxSide}=opts;
   const iw=S.img.naturalWidth,ih=S.img.naturalHeight;
@@ -324,7 +547,7 @@ function compose(target,opts){
   c.setTransform(sc,0,0,sc,-b.x0*sc,-b.y0*sc);
   if(photo){c.globalAlpha=.35;c.drawImage(S.img,0,0);c.globalAlpha=1}
   LW=+$('lw').value/sc*(maxSide/1000);GUIDE=$('guide').checked;
-  drawFigure();
+  drawFigure(lastE);
   if(handles){const r=9/sc*(maxSide/1000)*1.4;S.pts.forEach((p,i)=>{if(!HANDLES.includes(i))return;
     c.beginPath();c.arc(p.x,p.y,r,0,Math.PI*2);c.fillStyle=i===S.drag?'#e8452c':BLUE;c.globalAlpha=.85;c.fill();c.globalAlpha=1;c.lineWidth=r*.3;c.strokeStyle='#fff';c.stroke()})}
   ctxSwap(prev);
@@ -334,6 +557,8 @@ function ctxSwap(c){const p=ctx;ctx=c;return p}
 function render(){
   if(!S.pts)return;
   S.bulk=+$('bulk').value;
+  const A=analyze();lastE=eff(A);
+  if(S.drag<0)showAna(A);
   S.view=compose(cv,{crop:$('crop').checked,trans:false,photo:$('photo').checked,handles:$('edit').checked,maxSide:1000,fixed:S.drag>-1&&S.view?S.view.b:null});
 }
 
@@ -346,8 +571,11 @@ cv.addEventListener('pointerdown',e=>{
   let best=-1,bd=tol;HANDLES.forEach(i=>{const d=V.len(V.sub(S.pts[i],p));if(d<bd){bd=d;best=i}});
   if(best>-1){S.drag=best;cv.setPointerCapture(e.pointerId);e.preventDefault();render()}
 });
-cv.addEventListener('pointermove',e=>{if(S.drag<0)return;const p=toImg(e);
-  S.pts[S.drag].x=p.x;S.pts[S.drag].y=p.y;render()});
+cv.addEventListener('pointermove',e=>{if(S.drag<0)return;const p=toImg(e),q=S.pts[S.drag];
+  const dx=p.x-q.x,dy=p.y-q.y;q.x=p.x;q.y=p.y;
+  const mv=arr=>{if(arr)arr.forEach(o=>{o.x+=dx;o.y+=dy})};
+  if(S.drag===15)mv(S.hands.L);if(S.drag===16)mv(S.hands.R);if(S.drag===0)mv(S.face);
+  render()});
 const end=()=>{if(S.drag>-1){S.drag=-1;render()}};
 cv.addEventListener('pointerup',end);cv.addEventListener('pointercancel',end);
 
@@ -364,7 +592,10 @@ async function savePNG(){
     try{await downloads.save({filename:fn,data:blob});msg('保存しました：'+fn);return}
     catch(e){if(e&&e.code==='declined'){msg('保存をキャンセルしました');return}}
   }
-  if(!window.claude){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=fn;document.body.appendChild(a);a.click();a.remove();msg('保存しました：'+fn);return}
+  if(!window.claude){
+    const file=new File([blob],fn,{type:'image/png'});
+    if(navigator.canShare&&navigator.canShare({files:[file]})){try{await navigator.share({files:[file]});msg('共有メニューから保存できます');return}catch(e){if(e.name==='AbortError')return}}
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=fn;document.body.appendChild(a);a.click();a.remove();msg('保存しました：'+fn);return}
   $('mimg').src=URL.createObjectURL(blob);$('modal').classList.add('on');
 }
 $('mclose').onclick=()=>$('modal').classList.remove('on');
@@ -379,23 +610,22 @@ async function listGal(){
   if(!db)return;const all=await new Promise(r=>{const q=tx('readonly').getAll();q.onsuccess=()=>r(q.result);q.onerror=()=>r([])});
   $('gal').innerHTML='';
   all.reverse().forEach(it=>{const f=document.createElement('figure');const u=URL.createObjectURL(it.blob);
-    f.innerHTML=`<img alt="${it.name.replace(/[<>&"]/g,'')}" src="${u}"><button class="x" aria-label="削除">×</button>`;
-    f.querySelector('img').onclick=async()=>{if(downloads){try{await downloads.save({filename:it.name+'_pose.png',data:it.blob});return}catch(e){if(e&&e.code==='declined')return}}
-      $('mimg').src=u;$('modal').classList.add('on')};
+    f.innerHTML=`<img alt="${esc(it.name)}" src="${u}"><button class="x" aria-label="削除">×</button>`;
+    f.querySelector('img').onclick=()=>{$('mimg').src=u;$('modal').classList.add('on')};
     f.querySelector('.x').onclick=()=>{tx('readwrite').delete(it.id).onsuccess=listGal};
     $('gal').appendChild(f)});
 }
 $('keep').onclick=async()=>{
   if(!db)return msg('この表示ではギャラリーを使えません。PNGで保存してください');
-  const blob=await exportBlob();tx('readwrite').add({name:S.name,blob,t:Date.now()}).onsuccess=()=>{listGal();msg('ギャラリーに追加しました（タップで保存できます）')};
+  const blob=await exportBlob();tx('readwrite').add({name:S.name,blob,t:Date.now()}).onsuccess=()=>{listGal();msg('ギャラリーに追加しました（タップで表示・長押しで保存）')};
 };
 
 /* ---------- UI ---------- */
 $('pick').onclick=$('pick2').onclick=()=>$('file').click();
 $('file').onchange=e=>{load(e.target.files[0]);e.target.value=''};
 $('save').onclick=savePNG;
-$('reset').onclick=()=>{if(S.orig){S.pts=S.orig.map(p=>({...p}));render()}};
-['edit','photo','guide','crop','lw','bulk'].forEach(i=>$(i).addEventListener('input',render));
+$('reset').onclick=()=>{if(S.orig){Object.assign(S,clone(S.orig));render()}};
+['edit','photo','guide','crop','lw','bulk','ovBody','ovL','ovR','ovFL','ovFR'].forEach(i=>$(i).addEventListener('input',render));
 $('body').onclick=e=>{const b=e.target.closest('button');if(!b)return;S.body=b.dataset.v;
   $('body').querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed',x===b));render()};
 const st=$('stage');
@@ -405,7 +635,7 @@ st.addEventListener('drop',e=>{e.preventDefault();st.classList.remove('drop');lo
 
 openDB().then(d=>{db=d;listGal()});
 if(window.claude&&claude.use)claude.use('downloads').then(d=>{downloads=d}).catch(()=>{});
-setTimeout(()=>{initPose().catch(()=>{})},400);
+setTimeout(()=>{initModel().catch(()=>{})},400);
 }
 </script>
 </body>
