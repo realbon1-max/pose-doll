@@ -67,6 +67,9 @@ label.c input{width:22px;height:22px;accent-color:var(--blue)}
 .who{margin-bottom:10px}.who button i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:0}
 .prow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}.prow .btn{width:auto;flex:1;min-height:42px;font-size:14px}
 .prow label.c{flex:1}
+.tapbar{position:absolute;left:10px;right:10px;top:10px;z-index:3;background:var(--bg);border:2px solid var(--blue);border-radius:12px;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.18)}
+.tapbar p{margin:0 0 8px;font-weight:700;font-size:15px;line-height:1.45}
+.row3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.row3 .btn{min-height:44px;padding:0 8px}
 </style>
 </head>
 <body>
@@ -80,6 +83,7 @@ label.c input{width:22px;height:22px;accent-color:var(--blue)}
     </div>
     <canvas id="cv" hidden></canvas>
     <div class="busy" id="busy">ポーズを解析中…</div>
+    <div class="tapbar" id="tapbar" hidden><p id="tapmsg"></p><div class="row3"><button class="btn" id="tapBack">戻る</button><button class="btn" id="tapSkip">スキップ</button><button class="btn pri" id="tapDone">完了</button></div></div>
   </section>
 
   <aside class="side">
@@ -112,6 +116,9 @@ label.c input{width:22px;height:22px;accent-color:var(--blue)}
       <label class="c"><input type="checkbox" id="edit">関節をドラッグで調整する</label>
       <label class="c"><input type="checkbox" id="photo">元写真を薄く重ねる（確認用）</label>
       <button class="btn" id="reset" disabled>検出位置に戻す</button>
+      <div class="row" style="margin-top:8px"><button class="btn" id="tapBtn" disabled>タップで関節を指定</button><button class="btn" id="altBtn" disabled>別の検出候補</button></div>
+      <button class="btn" id="addBtn" disabled style="margin-top:8px">人物を追加して手動で指定</button>
+      <p class="note">組み合った写真で自動検出がずれたときは「タップで関節を指定」で、頭・肩・ひじ…の順に写真をタップしてください。</p>
     </div>
 
     <div class="card">
@@ -144,7 +151,7 @@ const $=id=>document.getElementById(id);
 const cv=$('cv');let ctx=cv.getContext('2d');
 const S={img:null,people:[],orig:null,body:'n',drag:null,view:null,name:'pose',bulk:1,cur:0,front:0,num:2};
 let PS=null,REL='';
-const INKS=['#18191b','#b3261e'],PCOL=['#3a7bd5','#d4452c'];
+const INKS=['#18191b','#b3261e','#1f6b3a'],PCOL=['#3a7bd5','#d4452c','#2e9d55'];
 let INK='#18191b';const BLUE='#3a7bd5';
 let mp=null,mpReady=null,downloads=null;
 if(location.search.includes('debug'))window.__S=S;
@@ -171,52 +178,112 @@ function initModel(){
 }
 const clone=o=>JSON.parse(JSON.stringify(o));
 const d2=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+/* 画像の一部を切り出し・回転して検出：逆さま・横倒し・密着した人物（担ぎ技・投げ技など）に対応 */
+function rotCanvas(img,deg,maxS,sx=0,sy=0,sw=img.naturalWidth,sh=img.naturalHeight){
+  const k=maxS/Math.max(sw,sh),r=deg*Math.PI/180;
+  const cw=deg%180===0?sw:sh,ch=deg%180===0?sh:sw;
+  const c=document.createElement('canvas');c.width=Math.round(cw*k);c.height=Math.round(ch*k);
+  const x=c.getContext('2d');x.fillStyle='#777';x.fillRect(0,0,c.width,c.height);
+  x.translate(c.width/2,c.height/2);x.rotate(r);x.drawImage(img,sx,sy,sw,sh,-sw*k/2,-sh*k/2,sw*k,sh*k);
+  const cs=Math.cos(-r),sn=Math.sin(-r);
+  const inv=(u,v)=>{const du=u-c.width/2,dv=v-c.height/2;return{x:(du*cs-dv*sn)/k+sx+sw/2,y:(du*sn+dv*cs)/k+sy+sh/2}};
+  const invW=l=>({x:l.x*cs-l.y*sn,y:l.x*sn+l.y*cs,z:l.z});
+  return{c,inv,invW,k};
+}
+const KEY=[0,11,12,13,14,15,16,23,24,25,26,27,28];
+const SWAP=[0,4,5,6,1,2,3,8,7,10,9,12,11,14,13,16,15,18,17,20,19,22,21,24,23,26,25,28,27,30,29,32,31];
+function torsoLen(p){return Math.max(d2(V.mid(p[11],p[12]),V.mid(p[23],p[24])),d2(p[11],p[12]),10)}
+function sameness(a,b){
+  const T=(torsoLen(a)+torsoLen(b))/2;
+  const m=sw=>KEY.reduce((s,i)=>s+d2(a[i],b[sw?SWAP[i]:i]),0)/KEY.length;
+  return Math.min(m(false),m(true))/T;
+}
+function plausible(p){
+  const t=d2(V.mid(p[11],p[12]),V.mid(p[23],p[24]))||1;let pen=0;
+  for(const [a,b,e] of [[11,13,.6],[12,14,.6],[13,15,.55],[14,16,.55],[23,25,.85],[24,26,.85],[25,27,.85],[26,28,.85]]){const r=d2(p[a],p[b])/(t*e);if(r>1.35)pen+=r-1.35}
+  return Math.exp(-pen);
+}
+const median=a=>{const b=[...a].sort((x,y)=>x-y),n=b.length;return n%2?b[(n-1)/2]:(b[n/2-1]+b[n/2])/2};
+const tick=()=>new Promise(r=>setTimeout(r,0));
+async function gatherClusters(img,m){
+  const w=img.naturalWidth,h=img.naturalHeight;
+  const WINS=[[0,0,1,1],[0,0,.75,.75],[.25,0,.75,.75],[0,.25,.75,.75],[.25,.25,.75,.75],[0,0,1,.65],[0,.35,1,.65],[.1,.1,.8,.8]];
+  const cands=[];let n=0;
+  for(const [a,b,cw,ch] of WINS)for(const deg of[0,90,180,270]){
+    n++;if(n%4===1){msg(`姿勢を解析中…（${Math.round(n/32*100)}%）`);await tick()}
+    const R=rotCanvas(img,deg,640,a*w,b*h,cw*w,ch*h);let pr;
+    try{pr=m.pose.detect(R.c)}catch(e){console.warn(e);continue}
+    (pr.landmarks||[]).forEach((L,i)=>{
+      const pts=L.map(l=>{const q=R.inv(l.x*R.c.width,l.y*R.c.height);return{x:q.x,y:q.y,z:(l.z||0)*R.c.width/R.k,v:l.visibility??1}});
+      const vis=KEY.reduce((s,j)=>s+(L[j].visibility??1),0)/KEY.length;
+      const W=pr.worldLandmarks&&pr.worldLandmarks[i];
+      cands.push({pts,world:W?W.map(R.invW):null,q:vis*plausible(pts)});
+    });
+  }
+  const groups=[];
+  for(const c of cands){const g=groups.find(g=>sameness(g[0].pts,c.pts)<.35);if(g)g.push(c);else groups.push([c])}
+  const clusters=groups.map(g=>{
+    const best=g.reduce((a,b)=>b.q>a.q?b:a),P=best.pts;
+    const al=g.map(c=>{const q=c.pts;const da=KEY.reduce((s,k)=>s+d2(P[k],q[k]),0),db=KEY.reduce((s,k)=>s+d2(P[k],q[SWAP[k]]),0);return db<da?q.map((_,k)=>q[SWAP[k]]):q});
+    const pts=P.map((_,k)=>({x:median(al.map(q=>q[k].x)),y:median(al.map(q=>q[k].y)),z:median(al.map(q=>q[k].z)),v:al.reduce((s,q)=>s+q[k].v,0)/al.length}));
+    return{pts,world:best.world,score:g.length*g.reduce((s,c)=>s+c.q,0)/g.length,n:g.length};
+  }).filter(c=>c.score>.4).sort((a,b)=>b.score-a.score);
+  if(location.search.includes('debug'))window.__clusters=clusters.map(c=>({score:+c.score.toFixed(2),n:c.n,nose:[Math.round(c.pts[0].x),Math.round(c.pts[0].y)]}));
+  return clusters;
+}
+function distinct(a,b){return d2(a.pts[0],b.pts[0])>.6*Math.max(torsoLen(a.pts),torsoLen(b.pts))&&sameness(a.pts,b.pts)>.45}
+function makePerson(cl,ci){return{pts:clone(cl.pts),world:cl.world?clone(cl.world):null,hands:{L:null,R:null},face:null,show:true,ci,
+  ov:{body:'auto',L:'auto',R:'auto',FL:'auto',FR:'auto'}}}
+async function detectFaces(img,m){
+  const faces=[];if(!m.face)return faces;
+  for(const deg of[0,180]){try{const R=rotCanvas(img,deg,1280);const fr=m.face.detect(R.c);
+    (fr.faceLandmarks||[]).forEach(L=>{const F=L.map(l=>{const q=R.inv(l.x*R.c.width,l.y*R.c.height);return{x:q.x,y:q.y,z:(l.z||0)*R.c.width/R.k,v:1}});
+      if(!faces.some(G=>d2(G[1],F[1])<d2(F[234],F[454])*.5))faces.push(F)})}catch(e){console.warn(e)}}
+  return faces;
+}
+function attachFaces(people,faces){
+  people.forEach(p=>p.face=null);
+  const pairs=[];faces.forEach((F,fi)=>people.forEach((p,pi)=>{const fw=d2(F[234],F[454]);const d=d2(F[1],p.pts[0]);if(d<fw*1.2)pairs.push({fi,pi,d})}));
+  pairs.sort((a,b)=>a.d-b.d);const uf=new Set();
+  for(const q of pairs){if(uf.has(q.fi)||people[q.pi].face)continue;people[q.pi].face=clone(faces[q.fi]);uf.add(q.fi)}
+}
+// 手：各手首のまわりを切り出して指を検出（小さく写った手や組み合った手に強くする）
+async function attachHands(people,img,m){
+  people.forEach(p=>p.hands={L:null,R:null});
+  if(!m.hand)return;
+  const claims=[];const cc=document.createElement('canvas');cc.width=cc.height=320;const cx=cc.getContext('2d');
+  people.forEach((p,pi)=>{for(const [sd,wi,ei] of [['L',15,13],['R',16,14]]){
+    const wr=p.pts[wi],el=p.pts[ei],fa=d2(wr,el);
+    const ctr={x:wr.x+(wr.x-el.x)*.45,y:wr.y+(wr.y-el.y)*.45},sz=Math.max(fa*2.4,48);
+    cx.fillStyle='#808080';cx.fillRect(0,0,320,320);
+    cx.drawImage(img,ctr.x-sz/2,ctr.y-sz/2,sz,sz,0,0,320,320);
+    let hr;try{hr=m.hand.detect(cc)}catch(e){continue}
+    (hr.landmarks||[]).forEach(L=>{
+      const pts=L.map(l=>({x:ctr.x-sz/2+l.x*sz,y:ctr.y-sz/2+l.y*sz,z:(l.z||0)*sz,v:1}));
+      const d=d2(pts[0],wr);if(d<sz*.45)claims.push({pi,sd,d,fa,pts});
+    });
+  }});
+  claims.sort((a,b)=>a.d-b.d);
+  const used=[];
+  for(const cl of claims){
+    const p=people[cl.pi];if(p.hands[cl.sd])continue;
+    if(used.some(u=>d2(u,cl.pts[0])<cl.fa*.3))continue;
+    p.hands[cl.sd]=cl.pts;used.push(cl.pts[0]);
+  }
+}
 async function detect(img){
   const m=await initModel();
-  const w=img.naturalWidth,h=img.naturalHeight;
-  const c=document.createElement('canvas');
-  const k=Math.min(1,1600/Math.max(w,h));
-  c.width=Math.round(w*k);c.height=Math.round(h*k);
-  c.getContext('2d').drawImage(img,0,0,c.width,c.height);
-  await m.pose.setOptions({numPoses:S.num});
-  const pr=m.pose.detect(c);
-  if(!pr.landmarks||!pr.landmarks.length)return[];
-  const cvt=l=>({x:l.x*w,y:l.y*h,z:(l.z||0)*w,v:l.visibility??1});
-  const people=pr.landmarks.map((L,i)=>({pts:L.map(cvt),
-    world:pr.worldLandmarks&&pr.worldLandmarks[i]?pr.worldLandmarks[i].map(l=>({x:l.x,y:l.y,z:l.z})):null,
-    hands:{L:null,R:null},face:null,show:true,ov:{body:'auto',L:'auto',R:'auto',FL:'auto',FR:'auto'}}));
+  await m.pose.setOptions({numPoses:2});
+  const clusters=await gatherClusters(img,m);
+  S.clusters=clusters;
+  const picked=[];
+  for(let i=0;i<clusters.length&&picked.length<S.num;i++)if(picked.every(j=>distinct(clusters[j],clusters[i])))picked.push(i);
+  const people=picked.map(i=>makePerson(clusters[i],i));
   people.sort((a,b)=>(a.pts[23].x+a.pts[24].x)-(b.pts[23].x+b.pts[24].x));
-  // 手：各手首のまわりを切り出して指を検出（小さく写った手や組み合った手に強くする）
-  if(m.hand){
-    const claims=[];const cc=document.createElement('canvas');cc.width=cc.height=320;const cx=cc.getContext('2d');
-    people.forEach((p,pi)=>{for(const [sd,wi,ei] of [['L',15,13],['R',16,14]]){
-      const wr=p.pts[wi],el=p.pts[ei],fa=d2(wr,el);
-      const ctr={x:wr.x+(wr.x-el.x)*.45,y:wr.y+(wr.y-el.y)*.45},sz=Math.max(fa*2.4,48);
-      cx.fillStyle='#808080';cx.fillRect(0,0,320,320);
-      cx.drawImage(img,ctr.x-sz/2,ctr.y-sz/2,sz,sz,0,0,320,320);
-      let hr;try{hr=m.hand.detect(cc)}catch(e){continue}
-      (hr.landmarks||[]).forEach(L=>{
-        const pts=L.map(l=>({x:ctr.x-sz/2+l.x*sz,y:ctr.y-sz/2+l.y*sz,z:(l.z||0)*sz,v:1}));
-        const d=d2(pts[0],wr);if(d<sz*.45)claims.push({pi,sd,d,fa,pts});
-      });
-    }});
-    claims.sort((a,b)=>a.d-b.d);
-    const used=[];
-    for(const cl of claims){
-      const p=people[cl.pi];if(p.hands[cl.sd])continue;
-      if(used.some(u=>d2(u,cl.pts[0])<cl.fa*.3))continue;
-      p.hands[cl.sd]=cl.pts;used.push(cl.pts[0]);
-    }
-  }
-  // 顔：鼻の位置がいちばん近い人物に割り当て
-  if(m.face){
-    try{const fr=m.face.detect(c);
-      const faces=(fr.faceLandmarks||[]).map(L=>L.map(cvt));
-      const pairs=[];faces.forEach((F,fi)=>people.forEach((p,pi)=>{const fw=d2(F[234],F[454]);const d=d2(F[1],p.pts[0]);if(d<fw*1.2)pairs.push({fi,pi,d})}));
-      pairs.sort((a,b)=>a.d-b.d);const uf=new Set();
-      for(const q of pairs){if(uf.has(q.fi)||people[q.pi].face)continue;people[q.pi].face=faces[q.fi];uf.add(q.fi)}
-    }catch(e){console.warn(e)}
-  }
+  msg('手と顔を解析中…');await tick();
+  S.faces=await detectFaces(img,m);
+  attachFaces(people,S.faces);
+  await attachHands(people,img,m);
   return people;
 }
 async function load(file){
@@ -232,10 +299,10 @@ async function analyzeImage(){
   $('busy').classList.add('on');msg('解析中…（初回は解析データ約36MBの読み込みに時間がかかります）');
   try{
     const people=await detect(img);
-    if(!people.length){msg('人物が見つかりませんでした。全身がはっきり写った写真でお試しください');$('busy').classList.remove('on');return}
+    $('empty').hidden=true;cv.hidden=false;['save','keep','reset','tapBtn','altBtn','addBtn'].forEach(i=>$(i).disabled=false);
+    if(!people.length){S.people=[];S.orig=[];buildWho();$('photo').checked=true;render();msg('人物を自動検出できませんでした。「人物を追加して手動で指定」から関節をタップしてください');$('busy').classList.remove('on');return}
     S.people=people;S.orig=clone(people);S.cur=0;
     S.front=0;if(people.length>1){PS=people[0];const t0=frame().T;PS=people[1];const t1=frame().T;S.front=t1>t0?1:0}
-    $('empty').hidden=true;cv.hidden=false;['save','keep','reset'].forEach(i=>$(i).disabled=false);
     buildWho();
     const nh=people.reduce((n,p)=>n+(p.hands.L?1:0)+(p.hands.R?1:0),0);
     msg(`${people.length}人を検出しました。指まで取れた手は${nh}本です。`+(people.length>1?'人物を切り替えると個別の判定が見られます。':'')+'ずれはドラッグで直せます');
@@ -634,16 +701,20 @@ function compose(target,opts){
   if(labels&&S.people.length>1){for(const pi of vis()){PS=S.people[pi];const {T}=frame();const p=PS.pts[0];const r=18*u;
     const x=p.x+T*.42,y=p.y-T*.42;c.beginPath();c.arc(x,y,r,0,Math.PI*2);c.fillStyle=PCOL[pi];c.fill();
     c.fillStyle='#fff';c.font=`700 ${22*u}px sans-serif`;c.textAlign='center';c.textBaseline='middle';c.fillText(String(pi+1),x,y+1*u)}}
+  if(S.tap&&labels){const P=S.people[S.tap.pi].pts[TAPSEQ[S.tap.step][0]];const r=22*u;
+    c.beginPath();c.arc(P.x,P.y,r,0,Math.PI*2);c.lineWidth=5*u;c.strokeStyle='#e8452c';c.stroke();
+    c.beginPath();c.arc(P.x,P.y,4*u,0,Math.PI*2);c.fillStyle='#e8452c';c.fill()}
   ctxSwap(prev);
   return{sc,b};
 }
 function ctxSwap(c){const p=ctx;ctx=c;return p}
 function render(){
-  if(!S.people.length)return;
+  if(!S.img)return;
+  if(!S.people.length){$('ana').innerHTML='<dt>状態</dt><dd>人物が未指定です</dd>';S.view=compose(cv,{crop:false,trans:false,photo:true,handles:false,maxSide:1000,labels:true});return}
   S.bulk=+$('bulk').value;
   S.people.forEach(p=>{PS=p;p._A=analyze();p._E=eff(p._A,p.ov)});
   REL=relation();
-  if(!S.drag){PS=S.people[S.cur];showAna(PS._A)}
+  if(!S.drag){PS=S.people[S.cur]||S.people[0];showAna(PS._A)}
   S.view=compose(cv,{crop:$('crop').checked,trans:false,photo:$('photo').checked,handles:$('edit').checked,maxSide:1000,labels:true,fixed:S.drag&&S.view?S.view.b:null});
 }
 
@@ -651,6 +722,7 @@ function render(){
 function toImg(e){const r=cv.getBoundingClientRect(),{sc,b}=S.view;
   const x=(e.clientX-r.left)*cv.width/r.width,y=(e.clientY-r.top)*cv.height/r.height;return{x:x/sc+b.x0,y:y/sc+b.y0}}
 cv.addEventListener('pointerdown',e=>{
+  if(S.tap){e.preventDefault();tapAt(toImg(e));return}
   if(!$('edit').checked||!S.people.length)return;
   const p=toImg(e),r=cv.getBoundingClientRect(),tol=28*(cv.width/r.width)/S.view.sc;
   let best=null,bd=tol;
@@ -664,6 +736,81 @@ cv.addEventListener('pointermove',e=>{if(!S.drag)return;const P=S.people[S.drag.
   render()});
 const end=()=>{if(S.drag){S.drag=null;render()}};
 cv.addEventListener('pointerup',end);cv.addEventListener('pointercancel',end);
+
+/* ---------- タップで関節を指定 ---------- */
+const TAPSEQ=[[0,'頭（鼻の位置）'],[11,'左肩'],[12,'右肩'],[13,'左ひじ'],[14,'右ひじ'],[15,'左手首'],[16,'右手首'],[23,'左の股関節（腰）'],[24,'右の股関節（腰）'],[25,'左ひざ'],[26,'右ひざ'],[27,'左足首'],[28,'右足首'],[31,'左足のつま先'],[32,'右足のつま先']];
+function startTap(pi){
+  S.cur=pi;buildWho();S.tap={pi,step:0,before:clone(S.people[pi])};
+  $('photo').checked=true;$('crop').checked=false;$('edit').checked=false;$('tapbar').hidden=false;
+  tapMsg();render();$('stage').scrollIntoView({behavior:'smooth',block:'start'});
+}
+function tapMsg(){const [,name]=TAPSEQ[S.tap.step];
+  $('tapmsg').textContent=`人物${S.tap.pi+1}の「${name}」をタップ（${S.tap.step+1}/${TAPSEQ.length}）`+(/[左右]/.test(name)?'　※写っている本人から見た左右':'')+'。赤い丸が今の位置です'}
+function tapAt(q){
+  const p=S.people[S.tap.pi],i=TAPSEQ[S.tap.step][0],o=p.pts[i];
+  const dx=q.x-o.x,dy=q.y-o.y;
+  p.pts[i]={x:q.x,y:q.y,z:0,v:1};
+  if(i===15&&p.hands.L)p.hands.L.forEach(h=>{h.x+=dx;h.y+=dy});
+  if(i===16&&p.hands.R)p.hands.R.forEach(h=>{h.x+=dx;h.y+=dy});
+  if(i===27||i===28){const t=i+4,hl=i+2;for(const k of[t,hl]){p.pts[k].x+=dx;p.pts[k].y+=dy}}
+  tapNext();
+}
+function tapNext(){S.tap.step++;if(S.tap.step>=TAPSEQ.length)endTap();else{tapMsg();render()}}
+function endTap(){const p=S.people[S.tap.pi];finalizeManual(p,S.tap.before);S.tap=null;$('tapbar').hidden=true;$('crop').checked=true;
+  msg('関節を指定しました。向き（表・裏）や手足の判定が違うときは判定結果の欄で切り替えてください');render()}
+function finalizeManual(p,before){
+  const P=p.pts,T=torsoLen(P),N=V.mid(P[11],P[12]);
+  const ch=i=>!before||d2(before.pts[i],P[i])>.5;
+  const up=V.norm(V.sub(P[0],N)),sd=V.perp(up),sg=V.dot(sd,V.sub(P[11],P[12]))>0?1:-1;
+  const at=(b,u,s)=>({x:b.x+up.x*u*T+sd.x*s*sg*T,y:b.y+up.y*u*T+sd.y*s*sg*T,z:0,v:1});
+  if([0,11,12].some(ch)){
+    P[7]=at(P[0],.03,.15);P[8]=at(P[0],.03,-.15);P[2]=at(P[0],.07,.06);P[5]=at(P[0],.07,-.06);
+    P[1]=at(P[0],.07,.04);P[3]=at(P[0],.07,.08);P[4]=at(P[0],.07,-.04);P[6]=at(P[0],.07,-.08);
+    P[9]=at(P[0],-.07,.04);P[10]=at(P[0],-.07,-.04);
+  }
+  for(const [w,e,a,b2,c] of [[15,13,17,19,21],[16,14,18,20,22]])if(ch(w)||ch(e)){
+    const d=V.norm(V.sub(P[w],P[e])),n=V.perp(d);const f=(k,s)=>({x:P[w].x+d.x*k*T+n.x*s*T,y:P[w].y+d.y*k*T+n.y*s*T,z:0,v:1});
+    P[a]=f(.1,.04);P[b2]=f(.13,-.01);P[c]=f(.05,-.05);
+  }
+  for(const [an,he,to,kn] of [[27,29,31,25],[28,30,32,26]])if(ch(an)||ch(to)){
+    if(!ch(to)&&before){const sh=V.norm(V.sub(P[an],P[kn]));const pp=V.perp(sh);P[to]={x:P[an].x+pp.x*T*.22,y:P[an].y+pp.y*T*.22,z:0,v:1}}
+    const f=V.norm(V.sub(P[to],P[an]));P[he]={x:P[an].x-f.x*T*.08,y:P[an].y-f.y*T*.08,z:0,v:1};
+  }
+  if(before){
+    if(d2(before.pts[0],P[0])>.4*T)p.face=null;
+    if(d2(before.pts[15],P[15])>.5*T)p.hands.L=null;
+    if(d2(before.pts[16],P[16])>.5*T)p.hands.R=null;
+  }
+  P.forEach(q=>{q.z=0});p.world=null;
+}
+async function nextAlt(){
+  const pi=S.cur,p=S.people[pi],C=S.clusters||[];
+  if(!p||p.ci==null||C.length<2)return msg('ほかの検出候補はありません。「タップで関節を指定」で直してください');
+  const others=S.people.filter((q,i)=>i!==pi);
+  for(let t=1;t<C.length;t++){const j=(p.ci+t)%C.length;
+    if(others.every(q=>q.ci!==j&&sameness(C[j].pts,q.pts)>.45)){
+      p.pts=clone(C[j].pts);p.world=C[j].world?clone(C[j].world):null;p.ci=j;
+      try{const m=await initModel();attachFaces(S.people,S.faces||[]);await attachHands(S.people,S.img,m)}catch(e){}
+      S.orig=clone(S.people);
+      msg(`人物${pi+1}を検出候補 ${j+1}/${C.length} に切り替えました`);render();return}
+  }
+  msg('ほかに使える候補がありません。「タップで関節を指定」で直してください');
+}
+function addPerson(){
+  if(S.people.length>=3)return msg('人物は3人まで追加できます');
+  const w=S.img.naturalWidth,h=S.img.naturalHeight,T=h*.2,cx=w/2,cy=h*.45;
+  const tpl={0:[0,-1.3],11:[.35,-1],12:[-.35,-1],13:[.45,-.5],14:[-.45,-.5],15:[.5,0],16:[-.5,0],23:[.22,0],24:[-.22,0],25:[.25,.8],26:[-.25,.8],27:[.25,1.6],28:[-.25,1.6],31:[.32,1.75],32:[-.32,1.75]};
+  const pts=Array.from({length:33},(_,i)=>{const t=tpl[i]||[0,0];return{x:cx+t[0]*T,y:cy+t[1]*T,z:0,v:1}});
+  const p={pts,world:null,hands:{L:null,R:null},face:null,show:true,ci:null,ov:{body:'auto',L:'auto',R:'auto',FL:'auto',FR:'auto'}};
+  finalizeManual(p,null);
+  S.people.push(p);S.orig=clone(S.people);buildWho();startTap(S.people.length-1);
+}
+$('tapBtn').onclick=()=>{if(S.people.length)startTap(S.cur);else addPerson()};
+$('altBtn').onclick=nextAlt;
+$('addBtn').onclick=addPerson;
+$('tapBack').onclick=()=>{if(S.tap.step>0){S.tap.step--;tapMsg();render()}};
+$('tapSkip').onclick=()=>tapNext();
+$('tapDone').onclick=()=>endTap();
 
 /* ---------- 保存 ---------- */
 function exportBlob(){
@@ -710,10 +857,10 @@ $('keep').onclick=async()=>{
 $('pick').onclick=$('pick2').onclick=()=>$('file').click();
 $('file').onchange=e=>{load(e.target.files[0]);e.target.value=''};
 $('save').onclick=savePNG;
-$('reset').onclick=()=>{if(S.orig){S.people.forEach((p,i)=>{const o=clone(S.orig[i]);p.pts=o.pts;p.hands=o.hands;p.face=o.face});render()}};
+$('reset').onclick=()=>{if(S.orig){S.people.forEach((p,i)=>{if(!S.orig[i])return;const o=clone(S.orig[i]);p.pts=o.pts;p.hands=o.hands;p.face=o.face;p.world=o.world});render()}};
 $('who').onclick=e=>{const b=e.target.closest('button');if(!b)return;S.cur=+b.dataset.i;buildWho();render()};
 $('show').oninput=()=>{const p=S.people[S.cur];if(p){p.show=$('show').checked;render()}};
-$('swap').onclick=()=>{if(S.people.length>1){S.front=1-S.front;render()}};
+$('swap').onclick=()=>{if(S.people.length>1){S.front=(S.front+1)%S.people.length;render()}};
 for(const id in OVMAP)$(id).addEventListener('input',()=>{const p=S.people[S.cur];if(p){p.ov[OVMAP[id]]=$(id).value;render()}});
 $('num').onclick=e=>{const b=e.target.closest('button');if(!b)return;S.num=+b.dataset.v;
   $('num').querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed',x===b));if(S.img)analyzeImage()};
