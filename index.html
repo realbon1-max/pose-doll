@@ -72,6 +72,12 @@ label.c input{width:22px;height:22px;accent-color:var(--blue)}
 .loupe{position:absolute;right:10px;bottom:10px;width:150px;height:150px;border-radius:50%;border:3px solid var(--blue);background:#fff;z-index:4;box-shadow:0 6px 18px rgba(0,0,0,.25);pointer-events:none}
 .presets{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin-top:8px}.presets .btn{min-height:42px;padding:0 4px;font-size:13px}
 .angv{display:inline-block;min-width:3.2em;text-align:right;font-variant-numeric:tabular-nums;color:var(--blue);font-weight:700}
+.cn{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:4px 10px}
+.cnout{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;margin-top:12px}
+.cnout figure{margin:0;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#000}
+.cnout img{width:100%;aspect-ratio:1;object-fit:contain;display:block}
+.cnout figcaption{display:flex;justify-content:space-between;align-items:center;gap:6px;background:var(--bg);padding:6px 8px;font-size:13px}
+.cnout figcaption button{min-height:36px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--ink);font:inherit;font-size:13px;padding:0 10px;cursor:pointer}
 .legend{font-size:13px;color:var(--mute);margin:6px 0 0}
 .row3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.row3 .btn{min-height:44px;padding:0 8px}
 </style>
@@ -113,6 +119,24 @@ label.c input{width:22px;height:22px;accent-color:var(--blue)}
         <button class="btn" data-y="35" data-p="30" disabled>斜め上</button><button class="btn" data-y="0" data-p="90" disabled>真上から</button><button class="btn" data-y="0" data-p="-90" disabled>真下から</button><button class="btn" data-y="35" data-p="-30" disabled>あおり</button>
       </div>
       <p class="note">人形の上を指でドラッグしても回せます（関節の調整中・タップ指定中を除く）。上下は＋で上から見下ろし、−で下から見上げます。関節の調整とタップ指定は「元の角度」で行います。</p>
+    </div>
+
+    <div class="card">
+      <h2>ControlNet 用の画像（前処理）</h2>
+      <div class="cn">
+        <label class="c"><input type="checkbox" id="cnCanny" checked>Canny</label>
+        <label class="c"><input type="checkbox" id="cnPose" checked>OpenPose Full</label>
+        <label class="c"><input type="checkbox" id="cnDepth">Depth</label>
+        <label class="c"><input type="checkbox" id="cnTile">Tile Resample</label>
+      </div>
+      <label class="f">Canny 下限 <span class="angv" id="cLoV">100</span><input type="range" id="cLo" min="1" max="255" value="100"></label>
+      <label class="f">Canny 上限 <span class="angv" id="cHiV">200</span><input type="range" id="cHi" min="1" max="255" value="200"></label>
+      <label class="f">Tile 縮小率<select id="tileR"><option value="1">1（等倍）</option><option value="2" selected>2</option><option value="4">4</option><option value="8">8</option></select></label>
+      <label class="c"><input type="checkbox" id="useDepth" checked>Depth の結果で手足・2人の前後を補正する</label>
+      <button class="btn blue" id="cnGo" disabled>選んだ画像を作る</button>
+      <div class="cnout" id="cnOut"></div>
+      <button class="btn" id="cnAll" hidden style="margin-top:10px">まとめて保存</button>
+      <p class="note">Canny・Depth・Tile は元の写真から、OpenPose Full は検出した骨格（全身・両手・顔）から作ります。OpenPose はカメラアングルを変えているとその角度で出力します。Depth は初回に約100MBのモデルを読み込みます。</p>
     </div>
 
     <div class="card">
@@ -301,7 +325,8 @@ async function attachHands(people,img,m){
 }
 /* ---------- YOLO11-pose（ONNX）：密着・逆さまに強い全身検出 ---------- */
 const YM={std:{name:'YOLO11-L',parts:['models/yolo11l-pose.part0','models/yolo11l-pose.part1']},
-          hq:{name:'YOLO11-X',parts:['models/yolo11x-pose.part0','models/yolo11x-pose.part1','models/yolo11x-pose.part2']}};
+          hq:{name:'YOLO11-X',parts:['models/yolo11x-pose.part0','models/yolo11x-pose.part1','models/yolo11x-pose.part2']},
+          depth:{name:'Depth Anything V2',parts:['models/da2s.part0','models/da2s.part1','models/da2s.part2']}};
 const ysess={};
 async function fetchCached(url){
   try{const c=await caches.open('pose-doll-models-v1');let r=await c.match(url);
@@ -313,7 +338,7 @@ async function yoloSession(key){
   if(ysess[key])return ysess[key];
   ysess[key]=(async()=>{
     const M=YM[key],bufs=[];let i=0;
-    for(const u of M.parts){i++;msg(`高精度モデル（${M.name}）を読み込み中… ${i}/${M.parts.length}（2回目以降は端末に保存したものを使います）`);bufs.push(await fetchCached(u))}
+    for(const u of M.parts){i++;msg(`解析モデル（${M.name}）を読み込み中… ${i}/${M.parts.length}（2回目以降は端末に保存したものを使います）`);bufs.push(await fetchCached(u))}
     const all=new Uint8Array(bufs.reduce((n,b)=>n+b.length,0));let o=0;for(const b of bufs){all.set(b,o);o+=b.length}
     msg('モデルを準備中…');
     try{if(navigator.gpu&&await navigator.gpu.requestAdapter())return await ort.InferenceSession.create(all,{executionProviders:['webgpu'],graphOptimizationLevel:'all'})}catch(e){console.warn('webgpu',e)}
@@ -443,7 +468,7 @@ async function analyzeImage(){
   $('busy').classList.add('on');msg('解析中…（初回は解析データの読み込みに時間がかかります）');
   try{
     const people=await detect(img);
-    $('empty').hidden=true;cv.hidden=false;['save','keep','reset','tapBtn','altBtn','addBtn','swAll','swArm','swLeg','yaw','pit'].forEach(i=>$(i).disabled=false);$('presets').querySelectorAll('button').forEach(b=>b.disabled=false);setCam(0,0,true);
+    $('empty').hidden=true;cv.hidden=false;['save','keep','reset','tapBtn','altBtn','addBtn','swAll','swArm','swLeg','yaw','pit','cnGo'].forEach(i=>$(i).disabled=false);S.depth=null;$('cnOut').innerHTML='';$('cnAll').hidden=true;$('presets').querySelectorAll('button').forEach(b=>b.disabled=false);setCam(0,0,true);
     if(!people.length){S.people=[];S.orig=[];buildWho();$('photo').checked=true;render();msg('人物を自動検出できませんでした。「人物を追加して手動で指定」から関節をタップしてください');$('busy').classList.remove('on');return}
     S.people=people;S.orig=clone(people);S.cur=0;
     S.front=0;if(people.length>1){PS=people[0];const t0=frame().T;PS=people[1];const t1=frame().T;S.front=t1>t0?1:0}
@@ -948,6 +973,16 @@ function handHuman(W,I,Pk,T){
   const tb=V.add(V.add(W,V.mul(d,T*.03)),V.mul(n,ts*T*.035));
   organic(tb,V.add(tb,V.mul(td,T*.1)),[[0,.026],[.5,.022],[1,.016]],[[0,.026],[.5,.022],[1,.016]],T,{openA:true,guide:false});
 }
+/* 下から見上げたときなど、胸があごより手前なら頭を先に描いて胴体で隠す */
+function headBehindChest(F){
+  const h=PS.head;if(!h)return false;
+  const {rings}=torso3D(F,false,true),T=F.T;
+  let chest=1e9;for(const R of rings)if(R.t<=.15)chest=Math.min(chest,R.O.z-Math.hypot(R.r.z*R.a,R.f.z*R.c));
+  const {c,u,f,r,H}=h,a=H*.37,b=H*.46,cc=H*.42;
+  const jc=V3.add(V3.add(c,V3.mul(u,-H*.2)),V3.mul(f,H*.07));
+  const jaw=jc.z-Math.hypot(r.z*a*.74,u.z*b*.62,f.z*cc*.78);
+  return chest<jaw-T*.03;
+}
 function drawHuman(E){
   const P=PS.pts,F=frame(),T=F.T,k=S.bulk,bt=S.body;
   const fa=(bt==='f'?.86:bt==='m'?1.15:1)*k,fl=(bt==='f'?1.05:bt==='m'?1.04:1)*k;
@@ -992,7 +1027,7 @@ function drawHuman(E){
   parts.push({z:tz,f:()=>{tor=torso3D(F,E.back)}});
   parts.push({z:tz-1e-4,f:()=>{for(const [sh,el] of [[11,13],[12,14]]){const d=V.norm(V.sub(P[el],P[sh])),c=V.add(P[sh],V.mul(d,T*.06));
     shape(()=>{ctx.ellipse(c.x,c.y,T*.115*fa,T*.088*fa,Math.atan2(d.y,d.x),0,Math.PI*2)},null)}}});
-  parts.push({z:tz-1e-3,f:()=>PS.head?headEllipsoid(F,'human'):headHuman(F,tor?tor.s:V.perp(V.norm(V.sub(F.C,F.N))),E.back)});
+  parts.push({z:headBehindChest(F)?tz+1e-3:tz-1e-3,f:()=>PS.head?headEllipsoid(F,'human'):headHuman(F,tor?tor.s:V.perp(V.norm(V.sub(F.C,F.N))),E.back)});
   parts.sort((a,b)=>b.z-a.z);
   parts.forEach(p=>p.f());
 }
@@ -1020,7 +1055,7 @@ function drawFigure(E){
   let tor=null;
   parts.push({z:tz,f:()=>{tor=torso(F,E.back)}});
   parts.push({z:tz-1e-4,f:()=>{ball(P[11],T*.105*k);ball(P[12],T*.105*k)}});
-  parts.push({z:tz-1e-3,f:()=>PS.head?headEllipsoid(F,'doll'):head(F,tor?tor.s:V.perp(V.norm(V.sub(F.C,F.N))),E.back)});
+  parts.push({z:headBehindChest(F)?tz+1e-3:tz-1e-3,f:()=>PS.head?headEllipsoid(F,'doll'):head(F,tor?tor.s:V.perp(V.norm(V.sub(F.C,F.N))),E.back)});
   parts.sort((a,b)=>b.z-a.z);
   parts.forEach(p=>p.f());
 }
@@ -1038,6 +1073,22 @@ function boneDepth(P){
   for(const [a,h,t] of [[27,29,31],[28,30,32]]){Z[h]=Z[a]-f*T*.05;Z[t]=Z[a]+f*T*.18}
   return Z;
 }
+/* Depth 画像で各骨の向き（手前か奥か）を決め直す */
+function depthSigned(P,Z0){
+  const T=Math.max(torsoLen(P),d2(P[11],P[12])/.75),Z=[...Z0];
+  const bones=[[11,13,.6],[13,15,.55],[12,14,.6],[14,16,.55],[23,25,.9],[25,27,.9],[24,26,.9],[26,28,.9]];
+  const kids={15:[17,19,21],16:[18,20,22],27:[29,31],28:[30,32]};
+  for(const [a,b,ratio] of bones){
+    const da=depthAt(P[a]),db=depthAt(P[b]);if(da==null||db==null)continue;
+    const dd=db-da,l=d2(P[a],P[b]),L=ratio*T,fore=Math.sqrt(Math.max(0,L*L-l*l)),orig=Z0[b]-Z0[a];
+    const mag=Math.max(Math.abs(orig),fore);
+    const nz=Math.abs(dd)>.02?Z[a]+(dd>0?-1:1)*mag:Z[a]+orig;
+    const delta=nz-Z[b];Z[b]=nz;
+    if(kids[b])for(const k of kids[b])Z[k]+=delta;
+    for(const [a2,b2] of bones)if(a2===b){/* 子の骨は次の反復で処理 */}
+  }
+  return Z;
+}
 function build3D(p){
   const P=p.pts;let Z;
   if(p.world&&p.wreal){
@@ -1047,6 +1098,7 @@ function build3D(p){
     const s=l2/(lw||1);Z=W.map(w=>(w.z-hw.z)*s);
   }else if(P.some(q=>Math.abs(q.z)>1)){const zc=(P[23].z+P[24].z)/2;Z=P.map(q=>q.z-zc)}
   else Z=boneDepth(P);
+  if(S.depth&&$('useDepth').checked)Z=depthSigned(P,Z);
   const pts=P.map((q,i)=>({x:q.x,y:q.y,z:Z[i],v:q.v}));
   const hands={};for(const sd of['L','R']){const H=p.hands[sd],w=sd==='L'?15:16;
     hands[sd]=H?H.map(h=>({x:h.x,y:h.y,z:pts[w].z+(h.z-H[0].z),v:1})):null}
@@ -1117,7 +1169,7 @@ function hull(pts){
   for(let i=p.length-1;i>=0;i--){const q=p[i];while(up.length>=2&&cr(up[up.length-2],up[up.length-1],q)<=0)up.pop();up.push(q)}
   up.pop();lo.pop();return lo.concat(up);
 }
-function torso3D(F,back){
+function torso3D(F,back,dry){
   const P=PS.pts,T=F.T,k=S.bulk,bt=S.body;
   const sh=V3.mid(P[11],P[12]),hp=V3.mid(P[23],P[24]);
   const u=nz(V3.sub(sh,hp));
@@ -1135,6 +1187,7 @@ function torso3D(F,back){
     dense.push({t,a,c,O,r,f,pts:Array.from({length:32},(_,i)=>{const th=i/32*Math.PI*2;return V3.add(O,V3.add(V3.mul(r,a*Math.cos(th)),V3.mul(f,c*Math.sin(th))))})})}
   const rings=L.map(([t,a,c,off])=>{const {r,f}=frameAt(t),O=V3.add(pos(t),V3.mul(f,off*T));
     return{t,a,c,O,r,f,pts:Array.from({length:40},(_,i)=>{const th=i/40*Math.PI*2;return V3.add(O,V3.add(V3.mul(r,a*Math.cos(th)),V3.mul(f,c*Math.sin(th))))})}});
+  if(dry)return{rings};
   const paths=[];
   for(let i=0;i<dense.length-1;i++){const hl=hull([...dense[i].pts,...dense[i+1].pts]);paths.push(()=>{ctx.moveTo(hl[0].x,hl[0].y);for(const q of hl)ctx.lineTo(q.x,q.y);ctx.closePath()})}
   const ch=rings[2],hpR=rings[6];
@@ -1393,6 +1446,112 @@ $('addBtn').onclick=addPerson;
 $('tapBack').onclick=()=>{if(S.tap.step>0){S.tap.step--;tapMsg();render()}};
 $('tapSkip').onclick=()=>tapNext();
 $('tapDone').onclick=()=>endTap();
+
+/* ---------- ControlNet 前処理：Canny / OpenPose Full / Depth / Tile Resample ---------- */
+function srcCanvas(maxS){const w=S.img.naturalWidth,h=S.img.naturalHeight,k=Math.min(1,maxS/Math.max(w,h));
+  const c=document.createElement('canvas');c.width=Math.round(w*k);c.height=Math.round(h*k);c.getContext('2d').drawImage(S.img,0,0,c.width,c.height);return c}
+function cannyMap(lo,hi){
+  const c=srcCanvas(1536),W=c.width,H=c.height,d=c.getContext('2d').getImageData(0,0,W,H).data,N=W*H;
+  let g=new Float32Array(N);for(let i=0;i<N;i++)g[i]=.299*d[i*4]+.587*d[i*4+1]+.114*d[i*4+2];
+  const K=[2,4,5,4,2,4,9,12,9,4,5,12,15,12,5,4,9,12,9,4,2,4,5,4,2],b=new Float32Array(N);
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){let s=0;for(let j=-2;j<=2;j++)for(let i=-2;i<=2;i++){const xx=Math.min(W-1,Math.max(0,x+i)),yy=Math.min(H-1,Math.max(0,y+j));s+=g[yy*W+xx]*K[(j+2)*5+i+2]}b[y*W+x]=s/159}
+  const mag=new Float32Array(N),dir=new Uint8Array(N);
+  for(let y=1;y<H-1;y++)for(let x=1;x<W-1;x++){const i=y*W+x,
+    gx=-b[i-W-1]-2*b[i-1]-b[i+W-1]+b[i-W+1]+2*b[i+1]+b[i+W+1],gy=-b[i-W-1]-2*b[i-W]-b[i-W+1]+b[i+W-1]+2*b[i+W]+b[i+W+1];
+    mag[i]=Math.abs(gx)+Math.abs(gy);let a=Math.atan2(gy,gx)*180/Math.PI;if(a<0)a+=180;dir[i]=a<22.5||a>=157.5?0:a<67.5?1:a<112.5?2:3}
+  const nms=new Float32Array(N);
+  for(let y=1;y<H-1;y++)for(let x=1;x<W-1;x++){const i=y*W+x,m=mag[i];let p,q;
+    switch(dir[i]){case 0:p=mag[i-1];q=mag[i+1];break;case 1:p=mag[i-W+1];q=mag[i+W-1];break;case 2:p=mag[i-W];q=mag[i+W];break;default:p=mag[i-W-1];q=mag[i+W+1]}
+    if(m>=p&&m>=q)nms[i]=m}
+  const out=new Uint8Array(N),st=[];
+  for(let i=0;i<N;i++)if(nms[i]>=hi){out[i]=255;st.push(i)}
+  while(st.length){const i=st.pop();const x=i%W,y=(i/W)|0;for(let j=-1;j<=1;j++)for(let k=-1;k<=1;k++){const xx=x+k,yy=y+j;if(xx<0||yy<0||xx>=W||yy>=H)continue;const n=yy*W+xx;if(!out[n]&&nms[n]>=lo){out[n]=255;st.push(n)}}}
+  const o=document.createElement('canvas');o.width=W;o.height=H;const ox=o.getContext('2d'),im=ox.createImageData(W,H);
+  for(let i=0;i<N;i++){const v=out[i];im.data[i*4]=im.data[i*4+1]=im.data[i*4+2]=v;im.data[i*4+3]=255}ox.putImageData(im,0,0);return o;
+}
+function tileMap(rate){
+  const w=S.img.naturalWidth,h=S.img.naturalHeight,s=document.createElement('canvas');s.width=Math.max(1,Math.round(w/rate));s.height=Math.max(1,Math.round(h/rate));
+  const sx=s.getContext('2d');sx.imageSmoothingQuality='high';sx.drawImage(S.img,0,0,s.width,s.height);
+  const o=document.createElement('canvas');o.width=w;o.height=h;const ox=o.getContext('2d');ox.imageSmoothingQuality='high';ox.drawImage(s,0,0,w,h);return o;
+}
+async function runDepth(){
+  const sess=await yoloSession('depth');msg('Depth を推定中…');await tick();
+  const Z=518,c=document.createElement('canvas');c.width=c.height=Z;const x=c.getContext('2d');x.drawImage(S.img,0,0,Z,Z);
+  const d=x.getImageData(0,0,Z,Z).data,N=Z*Z,t=new Float32Array(3*N),mu=[.485,.456,.406],sd=[.229,.224,.225];
+  for(let i=0;i<N;i++)for(let k=0;k<3;k++)t[k*N+i]=(d[i*4+k]/255-mu[k])/sd[k];
+  const out=await sess.run({[sess.inputNames[0]]:new ort.Tensor('float32',t,[1,3,Z,Z])});
+  const o=out[sess.outputNames[0]].data;let mn=1e9,mx=-1e9;for(let i=0;i<N;i++){mn=Math.min(mn,o[i]);mx=Math.max(mx,o[i])}
+  const nd=new Float32Array(N);for(let i=0;i<N;i++)nd[i]=(o[i]-mn)/((mx-mn)||1);
+  S.depth={w:Z,h:Z,data:nd};
+  if(S.people.length>1){const zs=S.people.map(p=>[11,12,23,24].reduce((a,i)=>a+(depthAt(p.pts[i])||0),0));S.front=zs.indexOf(Math.max(...zs))}
+  return S.depth;
+}
+function depthAt(p){const D=S.depth;if(!D||!S.img)return null;
+  const u=Math.min(D.w-1,Math.max(0,Math.round(p.x/S.img.naturalWidth*(D.w-1)))),v=Math.min(D.h-1,Math.max(0,Math.round(p.y/S.img.naturalHeight*(D.h-1))));
+  let s=0,n=0;for(let j=-2;j<=2;j++)for(let i=-2;i<=2;i++){const uu=Math.min(D.w-1,Math.max(0,u+i)),vv=Math.min(D.h-1,Math.max(0,v+j));s+=D.data[vv*D.w+uu];n++}return s/n}
+function depthMap(){
+  const D=S.depth,w=S.img.naturalWidth,h=S.img.naturalHeight,s=document.createElement('canvas');s.width=D.w;s.height=D.h;
+  const sx=s.getContext('2d'),im=sx.createImageData(D.w,D.h);for(let i=0;i<D.w*D.h;i++){const v=Math.round(D.data[i]*255);im.data[i*4]=im.data[i*4+1]=im.data[i*4+2]=v;im.data[i*4+3]=255}
+  sx.putImageData(im,0,0);const o=document.createElement('canvas');o.width=w;o.height=h;const ox=o.getContext('2d');ox.imageSmoothingQuality='high';ox.drawImage(s,0,0,w,h);return o;
+}
+const OP_LIMB=[[1,2],[1,5],[2,3],[3,4],[5,6],[6,7],[1,8],[8,9],[9,10],[1,11],[11,12],[12,13],[1,0],[0,14],[14,16],[0,15],[15,17]];
+const OP_COL=[[255,0,0],[255,85,0],[255,170,0],[255,255,0],[170,255,0],[85,255,0],[0,255,0],[0,255,85],[0,255,170],[0,255,255],[0,170,255],[0,85,255],[0,0,255],[85,0,255],[170,0,255],[255,0,255],[255,0,170],[255,0,85]];
+const OP_HAND=[[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[0,9],[9,10],[10,11],[11,12],[0,13],[13,14],[14,15],[15,16],[0,17],[17,18],[18,19],[19,20]];
+const MP68=[162,234,93,58,172,136,149,148,152,377,378,365,397,288,323,454,389,71,63,105,66,107,336,296,334,293,301,168,197,5,4,75,97,2,326,305,33,160,158,133,153,144,362,385,387,263,373,380,61,39,37,0,267,269,291,405,314,17,84,181,78,82,13,312,308,317,14,87];
+function hsv(h){const i=Math.floor(h*6),f=h*6-i,q=1-f;const r=[[1,f,0],[q,1,0],[0,1,f],[0,q,1],[f,0,1],[1,0,q]][i%6];return r.map(v=>Math.round(v*255))}
+function openposeMap(){
+  let W,H,map;
+  if(S.rot){const tmp=document.createElement('canvas');const v=compose(tmp,{crop:$('crop').checked,trans:false,photo:false,handles:false,labels:false,maxSide:1536});W=tmp.width;H=tmp.height;map=p=>({x:(p.x-v.b.x0)*v.sc,y:(p.y-v.b.y0)*v.sc})}
+  else{W=S.img.naturalWidth;H=S.img.naturalHeight;map=p=>({x:p.x,y:p.y})}
+  const o=document.createElement('canvas');o.width=W;o.height=H;const x=o.getContext('2d');x.fillStyle='#000';x.fillRect(0,0,W,H);
+  const sc=Math.max(W,H)/512,sw=4*sc;
+  for(const i of vis()){const P=S.vp[i].pts;
+    const K=[P[0],V.mid(P[11],P[12]),P[12],P[14],P[16],P[11],P[13],P[15],P[24],P[26],P[28],P[23],P[25],P[27],P[5],P[2],P[8],P[7]].map(q=>q?{...map(q),v:q.v??1}:null);
+    K[1].v=Math.min(P[11].v??1,P[12].v??1);
+    OP_LIMB.forEach(([a,b],k)=>{const A=K[a],B=K[b];if(!A||!B||A.v<.3||B.v<.3)return;
+      const mx=(A.x+B.x)/2,my=(A.y+B.y)/2,len=Math.hypot(A.x-B.x,A.y-B.y)/2,ang=Math.atan2(B.y-A.y,B.x-A.x);
+      x.globalAlpha=.6;x.fillStyle=`rgb(${OP_COL[k]})`;x.beginPath();x.ellipse(mx,my,len,sw,ang,0,Math.PI*2);x.fill()});
+    x.globalAlpha=1;
+    K.forEach((q,k)=>{if(!q||q.v<.3)return;x.fillStyle=`rgb(${OP_COL[k]})`;x.beginPath();x.arc(q.x,q.y,4*sc,0,Math.PI*2);x.fill()});
+    for(const sd of['L','R']){const Hh=S.vp[i].hands[sd];if(!Hh)continue;const Q=Hh.map(map);
+      x.lineWidth=2*sc;OP_HAND.forEach(([a,b],k)=>{x.strokeStyle=`rgb(${hsv(k/OP_HAND.length)})`;x.beginPath();x.moveTo(Q[a].x,Q[a].y);x.lineTo(Q[b].x,Q[b].y);x.stroke()});
+      x.fillStyle='#0000ff';Q.forEach(q=>{x.beginPath();x.arc(q.x,q.y,4*sc*.8,0,Math.PI*2);x.fill()})}
+    const Fc=S.vp[i].face;if(Fc){x.fillStyle='#fff';MP68.forEach(k=>{const q=map(Fc[k]);x.beginPath();x.arc(q.x,q.y,3*sc*.8,0,Math.PI*2);x.fill()})}
+  }
+  return o;
+}
+const CN=[];
+async function genControl(){
+  if(!S.img)return;$('cnGo').disabled=true;CN.length=0;
+  try{
+    const want=[['cnCanny','canny','Canny'],['cnPose','openpose_full','OpenPose Full'],['cnDepth','depth','Depth'],['cnTile','tile','Tile Resample']].filter(w=>$(w[0]).checked);
+    if(!want.length){msg('作る画像を1つ以上選んでください');return}
+    for(const [,key,label] of want){
+      msg(`${label} を作成中…`);await tick();let c;
+      if(key==='canny')c=cannyMap(+$('cLo').value,+$('cHi').value);
+      else if(key==='openpose_full'){if(!S.people.length)continue;c=openposeMap()}
+      else if(key==='depth'){if(!S.depth)await runDepth();c=depthMap()}
+      else c=tileMap(+$('tileR').value);
+      const blob=await new Promise(r=>c.toBlob(r,'image/png'));CN.push({key,label,blob,url:URL.createObjectURL(blob)});
+    }
+    $('cnOut').innerHTML=CN.map((c,i)=>`<figure><img src="${c.url}" alt="${c.label}"><figcaption><span>${c.label}</span><button data-i="${i}">保存</button></figcaption></figure>`).join('');
+    $('cnAll').hidden=CN.length<2;
+    msg(`ControlNet 用の画像を${CN.length}枚作りました`+(S.depth&&$('useDepth').checked?'。Depth で人形の前後も補正しました':''));
+    render();
+  }catch(e){console.error(e);msg('作成に失敗しました：'+(e.message||e))}
+  finally{$('cnGo').disabled=false}
+}
+async function saveBlobs(items){
+  const files=items.map(c=>new File([c.blob],`${S.name}_${c.key}.png`,{type:'image/png'}));
+  if(downloads){for(const f of files){try{await downloads.save({filename:f.name,data:f})}catch(e){if(e&&e.code==='declined')return}}return}
+  if(navigator.canShare&&navigator.canShare({files})){try{await navigator.share({files});return}catch(e){if(e.name==='AbortError')return}}
+  for(const f of files){const a=document.createElement('a');a.href=URL.createObjectURL(f);a.download=f.name;document.body.appendChild(a);a.click();a.remove();await new Promise(r=>setTimeout(r,300))}
+}
+$('cnGo').onclick=genControl;
+$('cnOut').onclick=e=>{const b=e.target.closest('button');if(b)saveBlobs([CN[+b.dataset.i]])};
+$('cnAll').onclick=()=>saveBlobs(CN);
+$('cLo').oninput=()=>$('cLoV').textContent=$('cLo').value;$('cHi').oninput=()=>$('cHiV').textContent=$('cHi').value;
+$('useDepth').addEventListener('input',render);
 
 /* ---------- 保存 ---------- */
 function exportBlob(){
