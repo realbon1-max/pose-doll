@@ -145,6 +145,9 @@ label.c input{width:22px;height:22px;accent-color:var(--blue)}
 
     <div class="card">
       <h2>人形のスタイル</h2>
+      <div class="seg" id="style" role="group" aria-label="人形の形" style="margin-bottom:8px">
+        <button data-v="human" aria-pressed="true">人体（なめらか）</button><button data-v="doll" aria-pressed="false">関節球の人形</button>
+      </div>
       <div class="seg" id="body" role="group" aria-label="体型">
         <button data-v="n" aria-pressed="true">標準</button><button data-v="f" aria-pressed="false">女性型</button><button data-v="m" aria-pressed="false">男性型</button>
       </div>
@@ -174,7 +177,7 @@ ort.env.wasm.wasmPaths=new URL('./ort/',location.href).href;ort.env.wasm.numThre
 {
 const $=id=>document.getElementById(id);
 const cv=$('cv');let ctx=cv.getContext('2d');
-const S={img:null,people:[],orig:null,body:'n',drag:null,view:null,name:'pose',bulk:1,cur:0,front:0,num:2,acc:'hq',cam:{yaw:0,pitch:0},rot:false,vp:[],orbit:null};
+const S={img:null,people:[],orig:null,body:'n',drag:null,view:null,name:'pose',bulk:1,cur:0,front:0,num:2,acc:'hq',style:'human',cam:{yaw:0,pitch:0},rot:false,vp:[],orbit:null};
 let PS=null,REL='';
 const INKS=['#18191b','#b3261e','#1f5fa8'],PCOL=['#3a7bd5','#d4452c','#2e9d55'];
 let INK='#18191b';const BLUE='#3a7bd5';
@@ -777,7 +780,158 @@ function frame(){
   const T=PS.T3||Math.max(V.len(V.sub(C,N)),V.len(V.sub(P[11],P[12]))*1.1,20);
   return{N,C,T};
 }
+/* ---------- 人体スタイル：なめらかな身体のライン ---------- */
+function openPath(pts){ctx.moveTo(pts[0].x,pts[0].y);for(let i=1;i<pts.length-1;i++){const m=V.mid(pts[i],pts[i+1]);ctx.quadraticCurveTo(pts[i].x,pts[i].y,m.x,m.y)}const l=pts[pts.length-1];ctx.lineTo(l.x,l.y)}
+function prof(cp,t){for(let i=0;i<cp.length-1;i++){const [t0,r0]=cp[i],[t1,r1]=cp[i+1];if(t<=t1){const u=(t-t0)/(t1-t0||1),e=(1-Math.cos(Math.PI*u))/2;return r0+(r1-r0)*e}}return cp[cp.length-1][1]}
+/* A→B の手足。pa は法線＋側、pb は−側の太さの輪郭（[t, 半径]）。openA で根元の線を描かない */
+function organic(A,B,pa,pb,T,o={}){
+  const d=V.norm(V.sub(B,A)),n=V.perp(d),L=V.len(V.sub(B,A));
+  if(L<1)return;
+  const N=14,l=[],r=[];
+  for(let i=0;i<=N;i++){const t=i/N,P=V.lerp(A,B,t);l.push(V.add(P,V.mul(n,prof(pa,t)*T)));r.push(V.sub(P,V.mul(n,prof(pb,t)*T)))}
+  const ra=(prof(pa,0)+prof(pb,0))/2*T,rb=(prof(pa,1)+prof(pb,1))/2*T;
+  const capB=V.add(V.mid(l[N],r[N]),V.mul(d,rb*.9)),capA=V.sub(V.mid(l[0],r[0]),V.mul(d,ra*.9));
+  const outline=withA=>{openPath(l);ctx.quadraticCurveTo(capB.x+(l[N].x-r[N].x)*.5,capB.y+(l[N].y-r[N].y)*.5,capB.x,capB.y);
+    ctx.quadraticCurveTo(capB.x-(l[N].x-r[N].x)*.5,capB.y-(l[N].y-r[N].y)*.5,r[N].x,r[N].y);
+    const rr=[...r].reverse();for(let i=1;i<rr.length-1;i++){const m=V.mid(rr[i],rr[i+1]);ctx.quadraticCurveTo(rr[i].x,rr[i].y,m.x,m.y)}ctx.lineTo(r[0].x,r[0].y);
+    if(withA){ctx.quadraticCurveTo(capA.x-(l[0].x-r[0].x)*.5,capA.y-(l[0].y-r[0].y)*.5,capA.x,capA.y);ctx.quadraticCurveTo(capA.x+(l[0].x-r[0].x)*.5,capA.y+(l[0].y-r[0].y)*.5,l[0].x,l[0].y)}};
+  ctx.fillStyle='#fff';ctx.beginPath();outline(true);ctx.closePath();ctx.fill();
+  ctx.strokeStyle=INK;ctx.lineWidth=LW;ctx.lineJoin='round';ctx.lineCap='round';ctx.beginPath();
+  if(o.strokeFrom){const i0=Math.round(o.strokeFrom*N),ll=l.slice(i0),rr=r.slice(i0);
+    openPath(ll);ctx.quadraticCurveTo(capB.x+(l[N].x-r[N].x)*.5,capB.y+(l[N].y-r[N].y)*.5,capB.x,capB.y);
+    ctx.quadraticCurveTo(capB.x-(l[N].x-r[N].x)*.5,capB.y-(l[N].y-r[N].y)*.5,r[N].x,r[N].y);
+    const rv=[...rr].reverse();for(let i=1;i<rv.length-1;i++){const m=V.mid(rv[i],rv[i+1]);ctx.quadraticCurveTo(rv[i].x,rv[i].y,m.x,m.y)}ctx.lineTo(rv[rv.length-1].x,rv[rv.length-1].y)}
+  else outline(!o.openA);
+  ctx.stroke();
+  if(o.guide!==false)guides(()=>{
+    const e=V.lerp(A,B,.12),f=V.lerp(A,B,.9);ctx.moveTo(e.x,e.y);ctx.lineTo(f.x,f.y);
+    for(const t of o.rings||[.5]){const X=V.lerp(A,B,t),ka=prof(pa,t)*T,kb=prof(pb,t)*T,c=V.add(X,V.mul(n,(ka-kb)/2)),rr=(ka+kb)/2;
+      ctx.moveTo(c.x+n.x*rr,c.y+n.y*rr);ctx.ellipse(c.x,c.y,rr*.3,rr,Math.atan2(d.y,d.x),-Math.PI/2,Math.PI/2,false)}
+  });
+}
+function ring(P,r,w=.7){lines(()=>{ctx.moveTo(P.x+r,P.y);ctx.arc(P.x,P.y,r,0,Math.PI*2)},w)}
+function bendSide(A,M,B){const d=V.sub(B,A),q=V.sub(M,A);return Math.sign(d.x*q.y-d.y*q.x)||1}
+
+function torsoHuman(F,back){
+  const P=PS.pts,{N,C,T}=F,k=S.bulk,bt=S.body;
+  const v=V.norm(V.sub(C,N));let s=V.perp(v);
+  if(V.dot(s,V.sub(P[11],P[12]))<0)s=V.mul(s,-1);
+  const W={sh:bt==='m'?.36:bt==='f'?.29:.32,ch:bt==='m'?.3:bt==='f'?.25:.27,wa:bt==='m'?.25:bt==='f'?.17:.21,hip:bt==='m'?.27:bt==='f'?.33:.29};
+  for(const x in W)W[x]*=T*k;
+  const widen=(Q,c,min,sg)=>{const o=V.sub(Q,c),p=V.dot(o,s);const want=sg*Math.max(Math.abs(p),min);return V.add(Q,V.mul(s,want-p))};
+  const pt=(base,sg,w,dv=0)=>V.add(V.add(base,V.mul(s,sg*w)),V.mul(v,dv*T));
+  const side=sg=>{
+    const S0=widen(sg>0?P[11]:P[12],N,W.sh,sg),H0=widen(sg>0?P[23]:P[24],C,W.hip*.82,sg);
+    const at=(t,w,dv=0)=>{const b=V.lerp(V.lerp(N,C,t),V.lerp(S0,H0,t),0);return pt(b,sg,w,dv)};
+    const so=V.dot(V.sub(S0,N),s)*sg,ho=V.dot(V.sub(H0,C),s)*sg;
+    const wAt=(t,base)=>{const lin=so+(ho-so)*t;return Math.max(base,lin*.0+base)};
+    return[pt(N,sg,T*.075,-.16),pt(N,sg,T*.1,-.07),pt(N,sg,so*.62,-.035),pt(N,sg,so*.93,.04),
+      at(.2,wAt(.2,W.ch*1.02)),at(.38,W.ch),at(.56,W.wa*1.12),at(.68,W.wa),at(.82,(W.wa+W.hip)/2*1.04),
+      pt(C,sg,Math.max(W.hip,ho*1.15),.05),pt(C,sg,W.hip*.92,.17),pt(C,sg,W.hip*.6,.27),pt(C,sg,T*.06,.33)];
+  };
+  const L=side(1),Rr=side(-1).reverse();
+  const crotch=V.add(C,V.mul(v,T*.34));
+  const outline=[...L,crotch,...Rr];
+  const WM=V.lerp(N,C,.68),CH=V.lerp(N,C,.42);
+  shape(()=>{const n=outline.length,m0=V.mid(outline[n-1],outline[0]);ctx.moveTo(m0.x,m0.y);
+    for(let i=0;i<n;i++){const p=outline[i],m=V.mid(p,outline[(i+1)%n]);ctx.quadraticCurveTo(p.x,p.y,m.x,m.y)}ctx.closePath()},
+  back?()=>{
+    const a=V.add(N,V.mul(v,-T*.12));ctx.moveTo(a.x,a.y);const b=V.add(C,V.mul(v,T*.1));ctx.lineTo(b.x,b.y);
+    for(const sg of[1,-1]){const c=pt(N,sg,W.sh*.52,.3),a2=Math.atan2(-s.y*sg,-s.x*sg),r=T*.17;ctx.moveTo(c.x+Math.cos(a2-.8)*r,c.y+Math.sin(a2-.8)*r);ctx.arc(c.x,c.y,r,a2-.8,a2+.8)}
+    for(const sg of[1,-1]){const a3=pt(C,sg,T*.03,.12),b3=pt(C,sg,W.hip*.85,.25),c3=V.add(V.mid(a3,b3),V.mul(v,T*.08));ctx.moveTo(a3.x,a3.y);ctx.quadraticCurveTo(c3.x,c3.y,b3.x,b3.y)}
+  }:()=>{
+    const a=V.add(N,V.mul(v,-T*.12));ctx.moveTo(a.x,a.y);const mm=V.add(V.lerp(N,C,.5),V.mul(s,T*.01));const b=V.add(C,V.mul(v,T*.3));ctx.quadraticCurveTo(mm.x,mm.y,b.x,b.y);
+    const c1=pt(CH,1,W.ch*.95,.12),c2=pt(CH,-1,W.ch*.95,.12),cc=V.add(CH,V.mul(v,T*.06));ctx.moveTo(c1.x,c1.y);ctx.quadraticCurveTo(cc.x+(cc.x-V.mid(c1,c2).x),cc.y+(cc.y-V.mid(c1,c2).y)*1,c2.x,c2.y);
+    const w1=pt(WM,1,W.wa*.9,.12),w2=pt(WM,-1,W.wa*.9,.12),wc=V.add(WM,V.mul(v,T*.2));ctx.moveTo(w1.x,w1.y);ctx.quadraticCurveTo(wc.x,wc.y,w2.x,w2.y);
+    for(const sg of[1,-1]){const h1=pt(C,sg,W.hip*.85,.0),h2=pt(C,sg,T*.04,.3);ctx.moveTo(h1.x,h1.y);ctx.lineTo(h2.x,h2.y)}
+  });
+  if(!back){
+    if(bt==='f'){lines(()=>{for(const sg of[1,-1]){const c=pt(N,sg,W.ch*.5,.3),r=T*.13*k,a=Math.atan2(v.y,v.x);
+      ctx.moveTo(c.x+Math.cos(a-1.7)*r,c.y+Math.sin(a-1.7)*r);ctx.arc(c.x,c.y,r,a-1.7,a+1.2)}},.9)}
+    else lines(()=>{for(const sg of[1,-1]){const a=pt(N,sg,T*.02,.36),b=pt(N,sg,W.ch*.85,.3),c=pt(N,sg,W.ch*.5,.42);ctx.moveTo(a.x,a.y);ctx.quadraticCurveTo(c.x,c.y,b.x,b.y)}},.6);
+    lines(()=>{const c=V.add(C,V.mul(v,-T*.12));ctx.moveTo(c.x+T*.012,c.y);ctx.arc(c.x,c.y,T*.012,0,Math.PI*2)},.6);
+  }
+  return{s,v};
+}
+function headHuman(F,s,back){
+  const P=PS.pts,{N,T}=F,Fc=PS.face;
+  let up,c,H,W,f,eyeOff;
+  if(Fc&&!back){
+    up=V.norm(V.sub(Fc[10],Fc[152]));const fh=V.len(V.sub(Fc[10],Fc[152]));
+    H=Math.max(T*.42,Math.min(T*.64,fh*1.45));W=H*.74;
+    c=V.add(V.mid(Fc[10],Fc[152]),V.mul(up,H*.1));
+    const side=V.norm(V.sub(Fc[454],Fc[234])),hw=V.len(V.sub(Fc[454],Fc[234]))/2||1;
+    f=V.dot(V.sub(Fc[1],V.mid(Fc[234],Fc[454])),side)/hw;const sd=V.perp(up);f*=Math.sign(V.dot(sd,side))||1;
+    eyeOff=-V.dot(V.sub(V.mid(Fc[33],Fc[263]),c),up);
+  }else{
+    const ear=V.mid(P[7],P[8]);up=V.norm(V.sub(ear,N));H=T*.5;W=H*.74;
+    c=V.add(ear,V.mul(up,H*.06));const sd=V.perp(up);f=V.dot(V.sub(P[0],ear),sd)/(W*.5)*1.4;eyeOff=H*.04;
+  }
+  f=Math.max(-.95,Math.min(.95,f));
+  const rot=Math.atan2(up.y,up.x)+Math.PI/2;
+  const chin=V.sub(c,V.mul(up,H*.36));
+  const nb=V.add(N,V.mul(up,-T*.04));
+  organic(nb,chin,[[0,.085],[.6,.058],[1,.06]],[[0,.085],[.6,.058],[1,.06]],T,{openA:true,guide:false});
+  if(!back)lines(()=>{for(const sg of[1,-1]){const a=V.add(V.lerp(nb,chin,.75),V.mul(V.perp(up),sg*T*.035)),b=V.add(nb,V.mul(V.perp(up),sg*T*.012));ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y)}},.5);
+  shape(()=>{ctx.save();ctx.translate(c.x,c.y);ctx.rotate(rot);
+    ctx.moveTo(-W/2,-H*.06);ctx.ellipse(0,-H*.06,W/2,H*.44,0,Math.PI,0,false);
+    ctx.bezierCurveTo(W/2,H*.22,W*.24,H*.5,0,H*.5);ctx.bezierCurveTo(-W*.24,H*.5,-W/2,H*.22,-W/2,-H*.06);ctx.closePath();ctx.restore()},()=>{
+    ctx.save();ctx.translate(c.x,c.y);ctx.rotate(rot);
+    if(back){ctx.moveTo(0,-H/2);ctx.lineTo(0,H*.45)}
+    else{const rx=Math.abs(f)*W/2;
+      if(rx<2){ctx.moveTo(0,-H/2);ctx.lineTo(0,H/2)}else{ctx.moveTo(0,-H/2);ctx.ellipse(0,0,rx,H/2,0,-Math.PI/2,Math.PI/2,f<0)}
+      const ey=eyeOff,hw=W/2*Math.sqrt(Math.max(0,1-(2*(ey+H*.06)/(H*.88))**2));ctx.moveTo(-hw,ey);ctx.ellipse(0,ey,hw,H*.07,0,Math.PI,0,true)}
+    ctx.restore()});
+}
+function drawHuman(E){
+  const P=PS.pts,F=frame(),T=F.T,k=S.bulk,bt=S.body;
+  const fa=(bt==='f'?.86:bt==='m'?1.15:1)*k,fl=(bt==='f'?1.05:bt==='m'?1.04:1)*k;
+  const z=i=>P[i].z,parts=[];
+  const C=V.mid(P[23],P[24]);
+  const tz=(z(11)+z(12)+z(23)+z(24))/4;
+  for(const [sh,el,wr,ix,pk,side] of [[11,13,15,19,17,'L'],[12,14,16,20,18,'R']]){
+    const ua=(z(sh)+z(el))/2;
+    parts.push({z:ua,f:()=>{
+      organic(P[sh],P[el],[[0,.08*fa],[.35,.09*fa],[.8,.068*fa],[1,.056*fa]],[[0,.078*fa],[.45,.083*fa],[1,.055*fa]],T,{openA:true,rings:[.45]});
+      ring(P[el],T*.042*fa,.55)}});
+    parts.push({z:(z(el)+z(wr))/2,f:()=>{
+      const sg=bendSide(P[sh],P[el],P[wr]);
+      const outer=[[0,.06*fa],[.22,.077*fa],[.6,.055*fa],[1,.038*fa]],inner=[[0,.058*fa],[.3,.064*fa],[1,.036*fa]];
+      organic(P[el],P[wr],sg>0?inner:outer,sg>0?outer:inner,T,{rings:[.35]});
+      const H=PS.hands[side];
+      if(H)handDetailed(H,E.hand[side]||'side',T,k);else handSimple(P[wr],P[ix],P[pk],T*k);
+      ring(P[wr],T*.03*fa,.5)}});
+  }
+  for(const [hp,kn,an,hl,to,side] of [[23,25,27,29,31,'L'],[24,26,28,30,32,'R']]){
+    const thz=(z(hp)+z(kn))/2;
+    parts.push({z:thz>tz+T*.25?thz:Math.min(thz,tz-2e-4),f:()=>{
+      const out=V.dot(V.sub(P[kn],P[hp]),V.perp(V.norm(V.sub(P[kn],P[hp]))))||0;
+      const d=V.norm(V.sub(P[kn],P[hp])),n=V.perp(d),outerPos=V.dot(V.sub(P[hp],C),n)>0;
+      const outer=[[0,.04*fl],[.2,.16*fl],[.38,.155*fl],[.78,.112*fl],[1,.088*fl]],inner=[[0,.03*fl],[.28,.1*fl],[.42,.13*fl],[.75,.105*fl],[1,.085*fl]];
+      const A0=V.sub(P[hp],V.mul(d,T*.22));
+      organic(A0,P[kn],outerPos?outer:inner,outerPos?inner:outer,T,{openA:true,rings:[.5,.8],strokeFrom:.22});
+    }});
+    parts.push({z:(z(kn)+z(an))/2,f:()=>{
+      const mode=E.foot[side];
+      const d=V.norm(V.sub(P[an],P[kn])),n=V.perp(d);
+      const hipSide=V.dot(V.sub(P[hp],P[kn]),n);
+      const calfPos=Math.abs(hipSide)>T*.05?hipSide>0:(V.dot(V.sub(P[kn],C),n)>0);
+      const calf=[[0,.088*fl],[.25,.118*fl],[.55,.085*fl],[.85,.05*fl],[1,.046*fl]],front=[[0,.088*fl],[.18,.08*fl],[.6,.06*fl],[1,.044*fl]];
+      const legDraw=()=>{organic(P[kn],P[an],calfPos?calf:front,calfPos?front:calf,T,{rings:[.3,.7]});
+        const kc=V.add(P[kn],V.mul(n,(calfPos?-1:1)*T*.03));lines(()=>{ctx.ellipse(kc.x,kc.y,T*.05*fl,T*.06*fl,Math.atan2(d.y,d.x),0,Math.PI*2)},.6)};
+      if(mode==='sole'){foot(P[an],P[hl],P[to],T*k,mode);legDraw()}else{legDraw();foot(P[an],P[hl],P[to],T*k,mode)}
+      ring(P[an],T*.035*fl,.6)}});
+  }
+  let tor=null;
+  parts.push({z:tz,f:()=>{tor=torsoHuman(F,E.back)}});
+  parts.push({z:tz-1e-4,f:()=>{for(const [sh,el] of [[11,13],[12,14]]){const d=V.norm(V.sub(P[el],P[sh])),c=V.add(P[sh],V.mul(d,T*.06));
+    shape(()=>{ctx.ellipse(c.x,c.y,T*.115*fa,T*.088*fa,Math.atan2(d.y,d.x),0,Math.PI*2)},null)}}});
+  parts.push({z:Math.min(tz,z(0))-1e-3,f:()=>headHuman(F,tor?tor.s:V.perp(V.norm(V.sub(F.C,F.N))),E.back)});
+  parts.sort((a,b)=>b.z-a.z);
+  parts.forEach(p=>p.f());
+}
 function drawFigure(E){
+  if(S.style==='human')return drawHuman(E);
   const P=PS.pts,F=frame(),T=F.T,k=S.bulk;
   const z=i=>P[i].z;
   const parts=[];
@@ -1058,6 +1212,8 @@ $('swAll').onclick=()=>swapLR('all');$('swArm').onclick=()=>swapLR('arm');$('swL
 $('yaw').addEventListener('input',()=>setCam(+$('yaw').value,S.cam.pitch));
 $('pit').addEventListener('input',()=>setCam(S.cam.yaw,+$('pit').value));
 $('presets').onclick=e=>{const b=e.target.closest('button');if(!b)return;setCam(+b.dataset.y,+b.dataset.p)};
+$('style').onclick=e=>{const b=e.target.closest('button');if(!b)return;S.style=b.dataset.v;
+  $('style').querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed',x===b));render()};
 $('acc').onclick=e=>{const b=e.target.closest('button');if(!b)return;S.acc=b.dataset.v;
   $('acc').querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed',x===b));if(S.img)analyzeImage()};
 $('tapBtn').onclick=()=>{if(S.people.length)startTap(S.cur);else addPerson()};
