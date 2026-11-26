@@ -731,9 +731,12 @@ function handDetailed(H,face,T,k){
       const segs=fi===0?[[1,2],[2,3],[3,4]]:[[f[0],f[1]],[f[1],f[2]],[f[2],f[3]]];
       segs.forEach(([a,b],si)=>{
         const ra=r*(1-si*.1),rb=si===2?r*tip[fi]:r*(.95-si*.1);
-        limb(H[a],H[b],ra,rb,1.02,.5,false);
+        if(S.style==='human')organic(H[a],H[b],[[0,ra/T],[.5,(ra+rb)/2/T*1.04],[1,rb/T]],[[0,ra/T],[.5,(ra+rb)/2/T*1.04],[1,rb/T]],T,{openA:si>0,guide:false});
+        else limb(H[a],H[b],ra,rb,1.02,.5,false);
       });
       if(face==='palm'&&fi>0)guides(()=>{for(const j of[1,2]){const p=H[f[j]],q=V.norm(V.perp(V.sub(H[f[j+1]],p)));ctx.moveTo(p.x+q.x*r*.8,p.y+q.y*r*.8);ctx.lineTo(p.x-q.x*r*.8,p.y-q.y*r*.8)}});
+      if(S.style==='human'&&face==='back'){const p=H[f[3]],q=V.norm(V.sub(H[f[2]],p)),c=V.add(p,V.mul(q,r*.75));
+        lines(()=>{ctx.ellipse(c.x,c.y,r*.42,r*.55,Math.atan2(q.y,q.x)+Math.PI/2,0,Math.PI*2)},.45)}
       if(face==='back'&&fi>0)guides(()=>{const e=f[3],p=H[e],q=V.norm(V.sub(H[f[2]],p));const m=V.add(p,V.mul(q,r*.9));ctx.moveTo(m.x+q.y*r*.4,m.y-q.x*r*.4);ctx.quadraticCurveTo(...[V.add(p,V.mul(q,r*.3))].flatMap(o=>[o.x,o.y]),m.x-q.y*r*.4,m.y+q.x*r*.4)});
     }});
   });
@@ -883,6 +886,68 @@ function headHuman(F,s,back){
       const ey=eyeOff,hw=W/2*Math.sqrt(Math.max(0,1-(2*(ey+H*.06)/(H*.88))**2));ctx.moveTo(-hw,ey);ctx.ellipse(0,ey,hw,H*.07,0,Math.PI,0,true)}
     ctx.restore()});
 }
+/* 足（人体スタイル）：正面向き＝5本の指、長く見える足＝かかと・土踏まず・甲、足の裏＝指の腹 */
+function footHuman(A,Hl,Toe,T,mode,other,knee){
+  const heel=V.lerp(A,Hl,.9),dv=V.sub(Toe,heel),L=V.len(dv),q=L/(T*.5);
+  const shin=V.norm(V.sub(A,knee));
+  const along=L>1?Math.abs(V.dot(V.norm(dv),shin)):1;
+  if(q<.42||along>.77){
+    const dd=V.len(dv)>T*.04?V.norm(V.add(V.mul(shin,.6),V.mul(V.norm(dv),.4))):shin,n=V.perp(dd);
+    const med=Math.sign(V.dot(V.sub(other,A),n))||1;
+    const top=V.add(A,V.mul(dd,T*.01)),ball=V.add(A,V.mul(dd,T*(.06+Math.min(q,1)*.12))),w0=T*.052,w1=T*.08;
+    const fr=V.add(ball,V.mul(dd,T*.028));
+    shape(()=>smoothClosed([V.add(top,V.mul(n,w0)),V.add(V.lerp(top,ball,.6),V.mul(n,w1*.95)),V.add(fr,V.mul(n,w1*.98)),V.add(V.add(fr,V.mul(dd,T*.02)),V.mul(n,w1*.4)),
+      V.add(V.add(fr,V.mul(dd,T*.02)),V.mul(n,-w1*.4)),V.add(fr,V.mul(n,-w1*.98)),V.add(V.lerp(top,ball,.6),V.mul(n,-w1*.95)),V.sub(top,V.mul(n,w0))]),
+      ()=>{ctx.moveTo(top.x,top.y);ctx.lineTo(ball.x,ball.y)});
+    if(mode==='sole'){lines(()=>{const h=V.add(fr,V.mul(dd,-T*.01));ctx.moveTo(h.x+n.x*w1*.7,h.y+n.y*w1*.7);ctx.quadraticCurveTo(h.x+dd.x*T*.05,h.y+dd.y*T*.05,h.x-n.x*w1*.7,h.y-n.y*w1*.7)},.6);return}
+    const toes=[[.66,1.3,1],[.3,1,.9],[-.02,.92,.82],[-.32,.85,.72],[-.6,.75,.62]];
+    for(let i=toes.length-1;i>=0;i--){const [x,ww,len]=toes[i];const c=V.add(V.add(fr,V.mul(n,med*x*w1)),V.mul(dd,T*.035*len));
+      const r=T*.025*ww;shape(()=>{ctx.ellipse(c.x,c.y,r,r*1.2,Math.atan2(dd.y,dd.x)+Math.PI/2,0,Math.PI*2)},null);
+      if(mode==='top'&&i===0)lines(()=>{const e=V.add(c,V.mul(dd,r*.35));ctx.ellipse(e.x,e.y,r*.5,r*.45,0,0,Math.PI*2)},.4)}
+    return;
+  }
+  const dn=V.norm(dv),n=V.perp(dn),up=Math.sign(V.dot(V.sub(A,heel),n))||1;
+  const back=V.sub(heel,V.mul(dn,T*.035)),tip=V.add(Toe,V.mul(dn,T*.01));
+  const med=Math.sign(V.dot(V.sub(other,A),n))||1;
+  let pa,pb;
+  if(mode==='side'){
+    const topP=[[0,.06],[.22,.115],[.55,.08],[.85,.045],[1,.03]],botP=[[0,.06],[.22,.035],[.45,.026],[.75,.042],[1,.026]];
+    pa=up>0?topP:botP;pb=up>0?botP:topP;
+  }else{
+    const mP=[[0,.045],[.35,.05],[.72,.075],[.9,.068],[1,.042]],lP=[[0,.045],[.35,.052],[.7,.064],[.9,.054],[1,.034]];
+    pa=med>0?mP:lP;pb=med>0?lP:mP;
+  }
+  organic(back,tip,pa,pb,T,{guide:false});
+  const at=(t,side)=>{const P=V.lerp(back,tip,t);const pr=side>0?pa:pb;return V.add(P,V.mul(n,side*prof(pr,t)*T))};
+  if(mode==='side'){
+    lines(()=>{const a=at(.8,up*-1),b=at(.8,up),c=V.add(V.mid(a,b),V.mul(dn,T*.012));ctx.moveTo(a.x,a.y);ctx.quadraticCurveTo(c.x,c.y,b.x,b.y)},.5);
+    guides(()=>{const a=at(.3,-up),b=at(.6,-up),c=V.add(V.mid(a,b),V.mul(n,up*T*.02));ctx.moveTo(a.x,a.y);ctx.quadraticCurveTo(c.x,c.y,b.x,b.y)});
+  }else{
+    const ts=[.79,.82,.83,.82,.8];
+    lines(()=>{for(let i=1;i<5;i++){const fr=med*(1-i*.42+.21);const p=V.add(V.lerp(back,tip,ts[i]),V.mul(n,fr*prof(med>0?pa:pb,.8)*T*.9));const e=V.add(p,V.mul(dn,T*(.06-i*.006)));ctx.moveTo(p.x,p.y);ctx.lineTo(e.x,e.y)}},.5);
+    if(mode==='sole'){
+      lines(()=>{for(let i=0;i<5;i++){const fr=med*(.75-i*.37);const p=V.add(V.lerp(back,tip,.93-i*.015),V.mul(n,fr*T*.05));const r=T*(i?.011:.016);ctx.moveTo(p.x+r,p.y);ctx.arc(p.x,p.y,r,0,Math.PI*2)}
+        const h=V.lerp(back,tip,.12);ctx.moveTo(h.x+T*.025,h.y);ctx.ellipse(h.x,h.y,T*.028,T*.025,0,0,Math.PI*2)},.5);
+      guides(()=>{const a=at(.3,med),b=at(.62,med),c=V.add(V.mid(a,b),V.mul(n,-med*T*.02));ctx.moveTo(a.x,a.y);ctx.quadraticCurveTo(c.x,c.y,b.x,b.y)});
+    }else{
+      lines(()=>{const p=V.add(V.lerp(back,tip,.95),V.mul(n,med*T*.03));ctx.moveTo(p.x+T*.009,p.y);ctx.arc(p.x,p.y,T*.009,0,Math.PI*2)},.45);
+      guides(()=>{ctx.moveTo(A.x,A.y);const m=V.lerp(back,tip,.78);ctx.lineTo(m.x,m.y)});
+    }
+  }
+}
+/* 手（指を検出できなかったとき）：手の平・4本指・親指 */
+function handHuman(W,I,Pk,T){
+  const tipM=V.mid(I,Pk);let d=V.sub(tipM,W);if(V.len(d)<1)d={x:0,y:1};d=V.norm(d);const n=V.perp(d);
+  const ts=Math.sign(V.dot(V.sub(I,Pk),n))||1;
+  const L=T*.21,pe=V.add(W,V.mul(d,L*.5)),fe=V.add(W,V.mul(d,L));
+  const thick=ts>0?[[0,.034],[.5,.05],[1,.05]]:[[0,.032],[.5,.044],[1,.046]],thin=ts>0?[[0,.032],[.5,.044],[1,.046]]:[[0,.034],[.5,.05],[1,.05]];
+  organic(W,pe,thick,thin,T,{openA:true,guide:false});
+  organic(V.sub(pe,V.mul(d,L*.04)),fe,[[0,.047],[.6,.042],[1,.03]],[[0,.045],[.6,.04],[1,.028]],T,{openA:true,guide:false});
+  lines(()=>{for(const f of[-.5,0,.5]){const a=V.add(pe,V.mul(n,f*T*.045)),b=V.add(V.lerp(pe,fe,.85),V.mul(n,f*T*.035));ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y)}},.5);
+  const ang=Math.atan2(d.y,d.x)+ts*.6,td={x:Math.cos(ang),y:Math.sin(ang)};
+  const tb=V.add(V.add(W,V.mul(d,T*.03)),V.mul(n,ts*T*.035));
+  organic(tb,V.add(tb,V.mul(td,T*.1)),[[0,.026],[.5,.022],[1,.016]],[[0,.026],[.5,.022],[1,.016]],T,{openA:true,guide:false});
+}
 function drawHuman(E){
   const P=PS.pts,F=frame(),T=F.T,k=S.bulk,bt=S.body;
   const fa=(bt==='f'?.86:bt==='m'?1.15:1)*k,fl=(bt==='f'?1.05:bt==='m'?1.04:1)*k;
@@ -899,7 +964,7 @@ function drawHuman(E){
       const outer=[[0,.06*fa],[.22,.077*fa],[.6,.055*fa],[1,.038*fa]],inner=[[0,.058*fa],[.3,.064*fa],[1,.036*fa]];
       organic(P[el],P[wr],sg>0?inner:outer,sg>0?outer:inner,T,{rings:[.35]});
       const H=PS.hands[side];
-      if(H)handDetailed(H,E.hand[side]||'side',T,k);else handSimple(P[wr],P[ix],P[pk],T*k);
+      if(H)handDetailed(H,E.hand[side]||'side',T,k);else handHuman(P[wr],P[ix],P[pk],T*k*(bt==='f'?.92:1));
       ring(P[wr],T*.03*fa,.5)}});
   }
   for(const [hp,kn,an,hl,to,side] of [[23,25,27,29,31,'L'],[24,26,28,30,32,'R']]){
@@ -919,7 +984,8 @@ function drawHuman(E){
       const calf=[[0,.088*fl],[.25,.118*fl],[.55,.085*fl],[.85,.05*fl],[1,.046*fl]],front=[[0,.088*fl],[.18,.08*fl],[.6,.06*fl],[1,.044*fl]];
       const legDraw=()=>{organic(P[kn],P[an],calfPos?calf:front,calfPos?front:calf,T,{rings:[.3,.7]});
         const kc=V.add(P[kn],V.mul(n,(calfPos?-1:1)*T*.03));lines(()=>{ctx.ellipse(kc.x,kc.y,T*.05*fl,T*.06*fl,Math.atan2(d.y,d.x),0,Math.PI*2)},.6)};
-      if(mode==='sole'){foot(P[an],P[hl],P[to],T*k,mode);legDraw()}else{legDraw();foot(P[an],P[hl],P[to],T*k,mode)}
+      const oth=P[an===27?28:27];const ft=()=>footHuman(P[an],P[hl],P[to],T*k,mode,oth,P[kn]);
+      if(mode==='sole'){ft();legDraw()}else{legDraw();ft()}
       ring(P[an],T*.035*fl,.6)}});
   }
   let tor=null;
