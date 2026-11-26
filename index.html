@@ -78,6 +78,9 @@ label.c input{width:22px;height:22px;accent-color:var(--blue)}
 .cnout img{width:100%;aspect-ratio:1;object-fit:contain;display:block}
 .cnout figcaption{display:flex;justify-content:space-between;align-items:center;gap:6px;background:var(--bg);padding:6px 8px;font-size:13px}
 .cnout figcaption button{min-height:36px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--ink);font:inherit;font-size:13px;padding:0 10px;cursor:pointer}
+.ptxt{width:100%;min-height:150px;font:14px/1.5 ui-monospace,Menlo,monospace;border:1px solid var(--line);border-radius:8px;padding:8px;background:var(--bg);color:var(--ink);resize:vertical}
+.pin{width:100%;font:inherit;font-size:16px;min-height:44px;border:1px solid var(--line);border-radius:8px;padding:0 10px;background:var(--bg);color:var(--ink)}
+.plist{margin:6px 0 0;padding-left:1.2em;font-size:14px}
 .legend{font-size:13px;color:var(--mute);margin:6px 0 0}
 .row3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.row3 .btn{min-height:44px;padding:0 8px}
 </style>
@@ -137,6 +140,28 @@ label.c input{width:22px;height:22px;accent-color:var(--blue)}
       <div class="cnout" id="cnOut"></div>
       <button class="btn" id="cnAll" hidden style="margin-top:10px">まとめて保存</button>
       <p class="note">Canny・Depth・Tile は元の写真から、OpenPose Full は検出した骨格（全身・両手・顔）から作ります。OpenPose はカメラアングルを変えているとその角度で出力します。Depth は初回に約100MBのモデルを読み込みます。</p>
+    </div>
+
+    <div class="card">
+      <h2>ポーズのプロンプト</h2>
+      <div class="seg" id="pmod" role="group" aria-label="生成モデル">
+        <button data-v="sd" aria-pressed="true">Stable Diffusion</button><button data-v="flux" aria-pressed="false">FLUX</button><button data-v="krea" aria-pressed="false">Krea 2</button>
+      </div>
+      <div class="seg" id="pstyle" role="group" aria-label="絵柄" style="margin-top:8px">
+        <button data-v="photo" aria-pressed="true">写実（写真）</button><button data-v="anime" aria-pressed="false">アニメ・イラスト</button>
+      </div>
+      <label class="f" style="grid-template-columns:5.5em minmax(0,1fr)">人物1<input class="pin" id="subj1" placeholder="例：a young woman with short red hair, wrestling outfit"></label>
+      <label class="f" style="grid-template-columns:5.5em minmax(0,1fr)" id="subj2row" hidden>人物2<input class="pin" id="subj2" placeholder="例：a woman with long brown hair, white shorts"></label>
+      <p class="note" style="margin-top:4px">人物の見た目は英語で入れると正確です。空欄なら体型の設定（標準・女性型・男性型）から決めます。</p>
+      <h2 style="margin-top:12px">プロンプト</h2>
+      <textarea class="ptxt" id="pOut" readonly></textarea>
+      <button class="btn" id="pCopy">プロンプトをコピー</button>
+      <div id="pNegBox"><h2 style="margin-top:12px">ネガティブプロンプト</h2>
+      <textarea class="ptxt" id="pNeg" readonly style="min-height:70px"></textarea>
+      <button class="btn" id="pNegCopy">ネガティブをコピー</button></div>
+      <h2 style="margin-top:12px">読み取ったポーズ（確認用）</h2>
+      <ul class="plist" id="pJa"></ul>
+      <p class="note" id="pTip"></p>
     </div>
 
     <div class="card">
@@ -1313,6 +1338,7 @@ function render(){
   S.rot=!!(S.cam.yaw||S.cam.pitch);
   S.vp=buildViews();S.vp.forEach((v,i)=>{PS=v;v._A=analyze();v._E=effView(v._A,S.people[i])});if(!S.rot)S.sphere=null;
   REL=relation();
+  if(!S.drag&&!S.orbit)try{buildPrompt()}catch(e){console.warn(e)}
   if(!S.drag){PS=S.people[S.cur]||S.people[0];showAna(PS._A)}
   S.view=compose(cv,{crop:$('crop').checked,trans:false,photo:$('photo').checked,handles:$('edit').checked,maxSide:1000,labels:true,fixed:S.drag&&S.view?S.view.b:null});
 }
@@ -1552,6 +1578,159 @@ $('cnOut').onclick=e=>{const b=e.target.closest('button');if(b)saveBlobs([CN[+b.
 $('cnAll').onclick=()=>saveBlobs(CN);
 $('cLo').oninput=()=>$('cLoV').textContent=$('cLo').value;$('cHi').oninput=()=>$('cHiV').textContent=$('cHi').value;
 $('useDepth').addEventListener('input',render);
+
+/* ---------- ポーズのプロンプト（SD / FLUX / Krea 2） ---------- */
+const PM={mod:'sd',style:'photo'};
+function ang3(a,b,c){return V3.ang(V3.sub(a,b),V3.sub(c,b))}
+function poseOf(i){
+  const P=S.people[i].pts,Vw=S.vp[i],Q=Vw.pts,A=Vw._A,T=Vw.T3||torsoLen(P);
+  const F={en:[],tag:[],ja:[],w:[]};
+  const add=(en,tag,ja,w)=>{if(en)F.en.push(en);if(tag)(w?F.w:F.tag).push(tag);if(ja)F.ja.push(ja)};
+  const M=(a,b)=>V3.mid(a,b),sh=M(P[11],P[12]),hp=M(P[23],P[24]);
+  const tor=Math.atan2(sh.x-hp.x,-(sh.y-hp.y))*180/Math.PI,at=Math.abs(tor);
+  const upright=at<55,upside=at>125,horiz=!upright&&!upside;
+  const knee=s=>ang3(P[s?23:24],P[s?25:26],P[s?27:28]),hipA=s=>ang3(sh,P[s?23:24],P[s?25:26]);
+  const kL=knee(1),kR=knee(0),hL=hipA(1),hR=hipA(0);
+  const thighs=V3.ang(V3.sub(P[25],P[23]),V3.sub(P[26],P[24]));
+  const ankleGap=d2(P[27],P[28]),shW=d2(P[11],P[12])||T*.7;
+  if(upside){add('the body is upside down, head pointing toward the ground and legs up in the air','upside-down','体が逆さま（頭が下・脚が上）',1)}
+  else if(horiz){add('the body is held horizontally','horizontal','体が横倒し・水平',1)}
+  if(upright){
+    const kneeDown=s=>{const kn=P[s?25:26],an=P[s?27:28];return kn.y>an.y-T*.18&&knee(s)<125};
+    const dL=kneeDown(1),dR=kneeDown(0);
+    if(dL&&dR){add('kneeling on both knees','kneeling','両膝をついている',1)}
+    else if(dL||dR){const s=dL?'left':'right';add(`kneeling on one knee (${s} knee on the ground), the other leg bent with the foot planted forward`,'kneeling, on one knee','片膝立ち（'+(dL?'左':'右')+'膝を床につく）',1)}
+    else{
+      const low=hp.y>Math.min(P[25].y,P[26].y)-T*.12;
+      if(kL<110&&kR<110&&low){const wide=ankleGap>shW*1.6;add(wide?'in a deep squat with the legs spread wide apart and knees pointing outward':'in a deep squat',wide?'squatting, spread legs':'squatting','深くしゃがむ'+(wide?'（脚を大きく開く）':''),1)}
+      else if(Math.min(hL,hR)<125&&kL<140&&kR<140&&!low){add('sitting with the knees bent','sitting','座っている',1)}
+      else if(kL>150&&kR>150&&Math.min(hL,hR)<130){add('standing and bending forward at the waist','bent over','立って前かがみ',1)}
+      else if((kL<130)!==(kR<130)&&ankleGap>shW*1.3){add(`in a lunge, ${kL<kR?'left':'right'} knee bent forward and the other leg extended`,'lunge','ランジ（片脚を曲げて踏み込む）',1)}
+      else{add(kL>150&&kR>150?'standing upright with straight legs':'standing with the knees slightly bent','standing','立っている',1)}
+      for(const s of[1,0]){const kn=P[s?25:26],an=P[s?27:28];if(an.y<hp.y)add(`the ${s?'left':'right'} leg is raised high with the foot above hip level`,'leg up',(s?'左':'右')+'脚を高く上げる');else if(kn.y<hp.y+T*.05&&knee(s)<120)add(`the ${s?'left':'right'} knee is lifted up to hip height`,'knee up',(s?'左':'右')+'膝を腰の高さまで上げる')}
+    }
+  }else{
+    for(const s of[1,0]){const k=knee(s);add(`the ${s?'left':'right'} leg is ${k>150?'straight':k>95?'bent at the knee':'sharply bent'}`,null,(s?'左':'右')+'脚：'+(k>150?'伸ばす':k>95?'膝を曲げる':'深く曲げる'))}
+  }
+  if(thighs>70&&!upside)add('legs spread wide apart','spread legs','脚を大きく開く');
+  const crossed=(P[27].x-P[28].x)*(P[23].x-P[24].x)<0&&ankleGap<shW*.8;
+  if(crossed)add('legs crossed at the ankles','crossed legs','脚を交差');
+  // 腕
+  const u=nz(V3.sub(sh,hp)),r=nz(orth(V3.sub(P[11],P[12]),u)),fw=nz(cross3(r,u));
+  const others=S.people.filter((_,j)=>j!==i);
+  const near=(w)=>{let best=null,bd=T*.28;others.forEach(o=>{[[0,'head'],[11,'shoulder'],[12,'shoulder'],[13,'arm'],[14,'arm'],[23,'waist'],[24,'waist'],[25,'thigh'],[26,'thigh'],[27,'leg'],[28,'leg']].forEach(([k,n])=>{const d=d2(w,o.pts[k]);if(d<bd){bd=d;best=n}})});return best};
+  const armsUp=[];
+  for(const s of[1,0]){
+    const S_=P[s?11:12],E=P[s?13:14],W=P[s?15:16],side=s?'left':'right',J=s?'左':'右';
+    const elev=V3.ang(V3.sub(E,S_),V3.mul(u,-1)),el=ang3(S_,E,W);
+    const bend=el>150?'straight':el>95?'bent at the elbow':'sharply bent at the elbow';
+    const head=P[0],up=V3.dot(V3.sub(W,head),u);
+    let pos,tag,ja;
+    const g=near(W);
+    if(g){pos=`reaching out and gripping the other person's ${g}`;tag=null;ja=`相手の${{head:'頭',shoulder:'肩',arm:'腕',waist:'腰',thigh:'太もも',leg:'脚'}[g]}をつかむ`}
+    else if(up>T*.15){pos='raised above the head';tag='arm up';ja='頭より上に上げる';armsUp.push(s)}
+    else if(d2(W,head)<T*.4){pos=V3.dot(V3.sub(W,head),fw)<0?'with the hand behind the head':'with the hand touching the head';tag=V3.dot(V3.sub(W,head),fw)<0?'arm behind head':'hand on own head';ja='手を頭に当てる'}
+    else if(d2(W,P[s?23:24])<T*.3){pos='with the hand on the hip';tag='hand on hip';ja='手を腰に当てる'}
+    else if(d2(W,P[s?25:26])<T*.3||d2(W,P[s?26:25])<T*.3){pos='with the hand resting on the knee';tag='hand on own knee';ja='手を膝に置く'}
+    else if(V3.dot(V3.sub(W,hp),fw)<-T*.12&&V3.dot(V3.sub(W,sh),u)<0){pos='held behind the back';tag='arm behind back';ja='背中側に回す'}
+    else if(V3.dot(V3.sub(W,sh),r)*(s?1:-1)<-T*.05){pos='crossing in front of the body';tag=null;ja='体の前を横切る'}
+    else if(elev>65&&elev<115){pos='extended out to the side at shoulder height';tag='outstretched arm';ja='肩の高さで横に伸ばす'}
+    else if(V3.dot(V3.sub(W,S_),fw)>T*.35){pos='reaching forward';tag='reaching';ja='前に伸ばす'}
+    else{pos='hanging down at the side';tag='arm at side';ja='体の横に下ろす'}
+    add(`the ${side} arm is ${pos}, ${bend}`,tag,`${J}腕：${ja}（${el>150?'伸ばす':el>95?'ひじを曲げる':'ひじを深く曲げる'}）`);
+  }
+  if(armsUp.length===2){F.tag=F.tag.filter(t=>t!=='arm up');F.w.push('arms up')}
+  // 手
+  for(const s of['L','R']){const h=A&&A.hand[s];if(!h)continue;const side=s==='L'?'left':'right',J=s==='L'?'左':'右';
+    const shape={'握りこぶし（グー）':['a clenched fist','clenched hand'],'パー（指を広げる）':['an open hand with the fingers spread','spread fingers'],'指差し':['the index finger pointing','pointing'],'ピース（チョキ）':['a peace sign','v'],'指をそろえて伸ばす':['a flat open hand with fingers together','open hand'],'親指を立てた握り':['a thumbs-up','thumbs up'],'軽く曲げた自然な手':['a relaxed, slightly curled hand',null]}[h.shape]||['a relaxed, natural hand shape',null];
+    const face=h.face==='palm'?'palm facing the viewer':h.face==='back'?'back of the hand facing the viewer':'hand seen from the side';
+    add(`the ${side} hand makes ${shape[0]}, ${face}`,shape[1],`${J}手：${h.shape||'自然な手'}・${h.face==='palm'?'手の平が見える':h.face==='back'?'手の甲が見える':'側面'}`);
+    if(h.face==='palm')F.tag.push('palm')}
+  // 足
+  for(const s of['L','R']){const f=A&&A.foot[s];if(!f)continue;if(f.vis==='sole')add(`the sole of the ${s==='L'?'left':'right'} foot faces the viewer`,'soles',(s==='L'?'左':'右')+'足の裏が見える')}
+  // 頭と向き（現在のカメラ角度）
+  const H=Vw.head;
+  if(H){const fz=H.f.z,fx=H.f.x,fy=H.f.y;
+    if(fz<-.75)add('the face is turned toward the camera, looking at the viewer','looking at viewer','顔はカメラの方を向く');
+    else if(fz>.4)add('the head faces away from the camera','facing away','顔はカメラと反対を向く');
+    else add(`the head is turned toward the viewer's ${fx<0?'left':'right'}`,'looking to the side',`顔は画面の${fx<0?'左':'右'}を向く`);
+    if(fy<-.4)add('the chin is raised, looking upward','looking up','見上げる');else if(fy>.4)add('the head is lowered, looking downward','looking down','うつむく');
+    const tilt=Math.atan2(H.u.x,-H.u.y)*180/Math.PI-Math.atan2(Q[11].x+Q[12].x-Q[23].x-Q[24].x,-(Q[11].y+Q[12].y-Q[23].y-Q[24].y))*180/Math.PI;
+    if(Math.abs(tilt)>15&&Math.abs(tilt)<90)add('the head is tilted to one side','head tilt','首をかしげる');
+  }
+  const yv=(()=>{const W=Vw.world;return Math.atan2(-(W[11].z-W[12].z),W[11].x-W[12].x)*180/Math.PI})(),ay=Math.abs(yv),back=Vw._E&&Vw._E.back&&!(H&&H.f.z<-.5);
+  let view;
+  const faceOn=H&&H.f.z<-.5;
+  if(!faceOn&&(back||ay>135)){view=['seen from behind, the back facing the camera','from behind','カメラに背中を向ける']}
+  else if(ay<25)view=['facing the camera directly','facing viewer','正面向き'];
+  else if(ay<65)view=[`in a three-quarter view, the body turned toward the viewer's ${yv>0?'left':'right'}`,'three-quarter view',`斜め向き（画面の${yv>0?'左':'右'}寄り）`];
+  else view=[`in side profile, facing the viewer's ${yv>0?'left':'right'}`,'from side',`真横向き（画面の${yv>0?'左':'右'}を向く）`];
+  F.view=view;F.upside=upside;F.T=T;
+  return F;
+}
+function relationPrompt(){
+  if(S.people.length<2)return null;
+  const a=S.people[0],b=S.people[1],F0=poseOf(0),F1=poseOf(1);
+  let md=1e9;for(const p of a.pts.slice(11))for(const q of b.pts.slice(11))md=Math.min(md,d2(p,q));
+  const T=(F0.T+F1.T)/2,touch=md<T*.3;
+  const out={en:[],tag:[],ja:[]};
+  if(touch&&(F0.upside!==F1.upside)){const c=F0.upside?2:1,u=F0.upside?1:2;
+    out.en.push(`person ${c} is lifting and carrying person ${u} upside down over the shoulders, person ${u}'s legs draped over person ${c}'s shoulders and person ${u}'s arms wrapped around person ${c}'s waist`);
+    out.tag.push('carrying','lifting person','upside-down','wrestling');out.ja.push(`人物${c}が人物${u}を逆さまに担ぎ上げている`)}
+  else if(touch){out.en.push('the two people are grappling, their bodies pressed together and limbs intertwined');out.tag.push('grappling','wrestling');out.ja.push('2人が組み合っている')}
+  const front=S.front+1;out.en.push(`person ${front} is closer to the camera`);out.ja.push(`手前は人物${front}`);
+  return out;
+}
+function subjOf(i){const v=($(i===0?'subj1':'subj2').value||'').trim();if(v)return v;
+  return S.body==='f'?(PM.style==='anime'?'a girl':'a woman'):S.body==='m'?(PM.style==='anime'?'a boy':'a man'):'a person'}
+function camText(){const p=S.cam.pitch;
+  if(p>=70)return['camera directly above, top-down bird\'s-eye view','from above','真上から'];
+  if(p>=35)return[`high-angle shot from above, looking down at about ${p} degrees`,'from above','上から見下ろす'];
+  if(p>=12)return[`slightly high angle, looking down at about ${p} degrees`,'from above','やや上から'];
+  if(p<=-70)return['camera directly below, extreme worm\'s-eye view looking straight up','from below','真下から'];
+  if(p<=-35)return[`low-angle shot from below, camera looking up at about ${-p} degrees`,'from below','下から見上げる'];
+  if(p<=-12)return[`slightly low angle, looking up at about ${-p} degrees`,'from below','やや下から'];
+  return['eye-level camera',null,'目線の高さ']}
+function buildPrompt(){
+  if(!S.people.length){$('pOut').value='';$('pNeg').value='';$('pJa').innerHTML='<li>写真を解析すると表示されます</li>';return}
+  const n=Math.min(S.people.length,2),Fs=[...Array(n)].map((_,i)=>poseOf(i)),R=relationPrompt(),cam=camText();
+  $('subj2row').hidden=n<2;
+  const ja=[`カメラ：${cam[2]}`];
+  Fs.forEach((F,i)=>{ja.push(`${n>1?'人物'+(i+1)+'：':''}${F.view[2]}`);F.ja.forEach(t=>ja.push((n>1?'人物'+(i+1)+'：':'')+t))});
+  if(R)R.ja.forEach(t=>ja.push(t));
+  $('pJa').innerHTML=ja.map(t=>`<li>${esc(t)}</li>`).join('');
+  const photo=PM.style==='photo';
+  if(PM.mod==='sd'){
+    const w=t=>`(${t}:1.2)`;
+    const base=photo?['photo','realistic','full body']:['masterpiece','best quality','full body'];
+    base.push(n>1?(S.body==='f'?'2girls':S.body==='m'?'2boys':photo?'two people':'2others'):(S.body==='f'?'1girl':S.body==='m'?'1boy':'solo'));
+    if(cam[1])base.push(w(cam[1]));
+    if(R)R.tag.forEach(t=>base.push(w(t)));
+    const chunks=Fs.map((F,i)=>{const own=[];const subj=($(i===0?'subj1':'subj2').value||'').trim();if(subj)own.push(subj);
+      if(F.view[1])own.push(F.view[1]);F.w.forEach(t=>own.push(w(t)));F.tag.forEach(t=>own.push(t));return[...new Set(own)].join(', ')});
+    $('pOut').value=n>1?[base.join(', '),...chunks].join(' BREAK '):[...new Set([...base,...chunks[0].split(', ')])].join(', ');
+    $('pNeg').value=(photo?'cartoon, anime, 3d render, ':'')+'bad anatomy, wrong pose, extra limbs, missing limbs, extra arms, extra legs, fused limbs, extra fingers, fused fingers, bad hands, deformed, mutated, lowres, worst quality, low quality, blurry, cropped';
+    $('pNegBox').hidden=false;
+    $('pTip').textContent='タグ形式です（SDXL・Pony・Illustrious など）。ポーズを正確に合わせるには、ControlNet 欄で作った OpenPose Full と Depth を一緒に使ってください。文章だけでは細かい手足の位置までは固定できません。';
+  }else{
+    const lines=[];
+    const style=photo?(PM.mod==='krea'?'Photorealistic full-body photograph, natural light, sharp detail.':'A photorealistic full-body photograph.'):(PM.mod==='krea'?'Clean anime-style full-body illustration.':'A full-body anime-style illustration.');
+    lines.push(style);
+    lines.push(`Camera: ${cam[0]}, the whole body in frame from head to feet.`);
+    if(n>1&&R)lines.push(`Two people: person 1 is ${subjOf(0)}; person 2 is ${subjOf(1)}. Interaction: ${R.en.join('; ')}.`);
+    Fs.forEach((F,i)=>{const who=n>1?`Person ${i+1}`:`The subject, ${subjOf(0)},`;
+      lines.push(`${who} is ${F.view[0]}. Pose: ${F.en.join('; ')}.`)});
+    lines.push('Left and right refer to the person\'s own left and right. Correct anatomy, natural proportions, all limbs and hands clearly visible.');
+    $('pOut').value=lines.join('\n');
+    $('pNegBox').hidden=true;
+    $('pTip').textContent=PM.mod==='flux'?'FLUX は文章で指示します（ネガティブプロンプトは使いません）。正確に合わせるなら FLUX 用 ControlNet（Union など）に OpenPose Full・Depth を入れてください。':'Krea 2 は文章で指示します。雰囲気を重視するモデルなので、文章だけだとポーズは近い形どまりです。ずれる場合は人形の画像を参照画像として一緒に使ってください。';
+  }
+}
+$('pmod').onclick=e=>{const b=e.target.closest('button');if(!b)return;PM.mod=b.dataset.v;$('pmod').querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed',x===b));buildPrompt()};
+$('pstyle').onclick=e=>{const b=e.target.closest('button');if(!b)return;PM.style=b.dataset.v;$('pstyle').querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed',x===b));buildPrompt()};
+$('subj1').oninput=$('subj2').oninput=()=>buildPrompt();
+const copyT=async(id,btn)=>{try{await navigator.clipboard.writeText($(id).value);const t=$(btn).textContent;$(btn).textContent='コピーしました';setTimeout(()=>$(btn).textContent=t,1500)}catch(e){$(id).select();msg('コピーできない場合は、文字を長押しして選択してください')}};
+$('pCopy').onclick=()=>copyT('pOut','pCopy');$('pNegCopy').onclick=()=>copyT('pNeg','pNegCopy');
 
 /* ---------- 保存 ---------- */
 function exportBlob(){
