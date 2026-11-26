@@ -969,7 +969,7 @@ function drawHuman(E){
   }
   for(const [hp,kn,an,hl,to,side] of [[23,25,27,29,31,'L'],[24,26,28,30,32,'R']]){
     const thz=(z(hp)+z(kn))/2;
-    parts.push({z:thz>tz+T*.25?thz:Math.min(thz,tz-2e-4),f:()=>{
+    parts.push({z:thz<tz-T*.3?thz:Math.max(thz,tz+2e-4),f:()=>{
       const out=V.dot(V.sub(P[kn],P[hp]),V.perp(V.norm(V.sub(P[kn],P[hp]))))||0;
       const d=V.norm(V.sub(P[kn],P[hp])),n=V.perp(d),outerPos=V.dot(V.sub(P[hp],C),n)>0;
       const outer=[[0,.04*fl],[.2,.16*fl],[.38,.155*fl],[.78,.112*fl],[1,.088*fl]],inner=[[0,.03*fl],[.28,.1*fl],[.42,.13*fl],[.75,.105*fl],[1,.085*fl]];
@@ -989,10 +989,10 @@ function drawHuman(E){
       ring(P[an],T*.035*fl,.6)}});
   }
   let tor=null;
-  parts.push({z:tz,f:()=>{tor=torsoHuman(F,E.back)}});
+  parts.push({z:tz,f:()=>{tor=torso3D(F,E.back)}});
   parts.push({z:tz-1e-4,f:()=>{for(const [sh,el] of [[11,13],[12,14]]){const d=V.norm(V.sub(P[el],P[sh])),c=V.add(P[sh],V.mul(d,T*.06));
     shape(()=>{ctx.ellipse(c.x,c.y,T*.115*fa,T*.088*fa,Math.atan2(d.y,d.x),0,Math.PI*2)},null)}}});
-  parts.push({z:Math.min(tz,z(0))-1e-3,f:()=>headHuman(F,tor?tor.s:V.perp(V.norm(V.sub(F.C,F.N))),E.back)});
+  parts.push({z:tz-1e-3,f:()=>PS.head?headEllipsoid(F,'human'):headHuman(F,tor?tor.s:V.perp(V.norm(V.sub(F.C,F.N))),E.back)});
   parts.sort((a,b)=>b.z-a.z);
   parts.forEach(p=>p.f());
 }
@@ -1020,7 +1020,7 @@ function drawFigure(E){
   let tor=null;
   parts.push({z:tz,f:()=>{tor=torso(F,E.back)}});
   parts.push({z:tz-1e-4,f:()=>{ball(P[11],T*.105*k);ball(P[12],T*.105*k)}});
-  parts.push({z:Math.min(tz,z(0))-1e-3,f:()=>head(F,tor?tor.s:V.perp(V.norm(V.sub(F.C,F.N))),E.back)});
+  parts.push({z:tz-1e-3,f:()=>PS.head?headEllipsoid(F,'doll'):head(F,tor?tor.s:V.perp(V.norm(V.sub(F.C,F.N))),E.back)});
   parts.sort((a,b)=>b.z-a.z);
   parts.forEach(p=>p.f());
 }
@@ -1053,7 +1053,111 @@ function build3D(p){
   const face=p.face?p.face.map(f=>({x:f.x,y:f.y,z:pts[0].z+(f.z-p.face[1].z),v:1})):null;
   const sh=V3.mid(pts[11],pts[12]),hp=V3.mid(pts[23],pts[24]);
   const T3=Math.max(V3.len(V3.sub(sh,hp)),V3.len(V3.sub(pts[11],pts[12]))*1.1,20);
-  return{pts,hands,face,T3};
+  return{pts,hands,face,T3,head:headFrame(pts,face,T3)};
+}
+const cross3=V3.cross,nz=a=>V3.norm(a),orth=(a,b)=>V3.sub(a,V3.mul(b,V3.dot(a,b)));
+function headFrame(P,F,T){
+  const neck=V3.mid(P[11],P[12]);let u,f,r,c,H;
+  if(F){
+    u=nz(V3.sub(F[10],F[152]));let rr=orth(V3.sub(F[454],F[234]),u);
+    f=nz(cross3(nz(rr),u));if(V3.dot(f,V3.sub(F[1],V3.mid(F[234],F[454])))<0)f=V3.mul(f,-1);
+    r=nz(cross3(u,f));H=Math.max(T*.42,Math.min(T*.64,V3.len(V3.sub(F[10],F[152]))*1.5));
+    c=V3.add(V3.add(V3.mid(F[10],F[152]),V3.mul(u,H*.08)),V3.mul(f,-H*.2));
+  }else{
+    const c0=V3.mid(P[7],P[8]);u=nz(V3.sub(c0,neck));
+    let rr=orth(V3.sub(P[7],P[8]),u);if(V3.len(rr)<T*.03)rr=orth(V3.sub(P[11],P[12]),u);
+    r=nz(rr);f=nz(cross3(r,u));
+    if(V3.dot(f,V3.sub(P[0],c0))<0&&V3.len(orth(V3.sub(P[0],c0),u))>T*.03){f=V3.mul(f,-1);r=nz(cross3(u,f))}
+    H=T*.5;c=V3.add(c0,V3.mul(u,H*.06));
+  }
+  return{c,u,f,r,H};
+}
+function ellOf(c,A,B,C){
+  const sxx=A.x*A.x+B.x*B.x+C.x*C.x,syy=A.y*A.y+B.y*B.y+C.y*C.y,sxy=A.x*A.y+B.x*B.y+C.x*C.y;
+  const m=(sxx+syy)/2,dd=Math.sqrt(((sxx-syy)/2)**2+sxy*sxy);
+  return{x:c.x,y:c.y,rx:Math.sqrt(Math.max(1e-6,m+dd)),ry:Math.sqrt(Math.max(1e-6,m-dd)),ang:.5*Math.atan2(2*sxy,sxx-syy)};
+}
+function ellPath(e){ctx.moveTo(e.x+Math.cos(e.ang)*e.rx,e.y+Math.sin(e.ang)*e.rx);ctx.ellipse(e.x,e.y,e.rx,e.ry,e.ang,0,Math.PI*2)}
+/* 重なった図形の外周だけを線にする（輪郭線を太く描いてから白で塗る） */
+function unionDraw(paths){
+  ctx.save();ctx.strokeStyle=INK;ctx.lineWidth=LW*2.5;ctx.lineJoin='round';
+  for(const p of paths){ctx.beginPath();p();ctx.stroke()}
+  ctx.fillStyle='#fff';ctx.strokeStyle='#fff';ctx.lineWidth=LW*.55;for(const p of paths){ctx.beginPath();p();ctx.fill();ctx.stroke()}
+  ctx.restore();
+}
+/* 3D曲線のうち、こちらを向いている部分だけを描く */
+function curve3(fnP,fnN,t0,t1,n=48){
+  let on=false;
+  for(let i=0;i<=n;i++){const t=t0+(t1-t0)*i/n,p=fnP(t),v=fnN(t).z<0;
+    if(v&&!on){ctx.moveTo(p.x,p.y);on=true}else if(v)ctx.lineTo(p.x,p.y);else on=false}
+}
+function headEllipsoid(F,style){
+  const h=PS.head;if(!h)return;
+  const {c,u,f,r,H}=h,T=F.T;
+  const a=H*.37,b=H*.46,cc=H*.42;
+  const cr=ellOf(c,V3.mul(r,a),V3.mul(u,b),V3.mul(f,cc));
+  const jc=V3.add(V3.add(c,V3.mul(u,-H*.2)),V3.mul(f,H*.07));
+  const jw=ellOf(jc,V3.mul(r,a*.74),V3.mul(u,b*.62),V3.mul(f,cc*.78));
+  const N=F.N,top=V3.add(V3.add(c,V3.mul(u,-H*.36)),V3.mul(f,-H*.06));
+  if(style==='human')organic(V.add(N,V.mul(V.norm(V.sub(top,N)),-T*.04)),top,[[0,.085],[.6,.058],[1,.062]],[[0,.085],[.6,.058],[1,.062]],T,{openA:true,guide:false});
+  else limb(N,top,T*.1,T*.08,1,.5,false);
+  unionDraw(style==='human'?[()=>ellPath(cr),()=>ellPath(jw)]:[()=>ellPath(cr)]);
+  guides(()=>{
+    curve3(t=>V3.add(c,V3.add(V3.mul(u,b*Math.sin(t)),V3.mul(f,cc*Math.cos(t)))),t=>V3.add(V3.mul(u,Math.sin(t)/b),V3.mul(f,Math.cos(t)/cc)),-Math.PI,Math.PI,72);
+    const y0=-.08,k=Math.sqrt(1-y0*y0);
+    curve3(t=>V3.add(c,V3.add(V3.mul(u,b*y0),V3.mul(V3.add(V3.mul(r,a*Math.sin(t)),V3.mul(f,cc*Math.cos(t))),k))),
+      t=>V3.add(V3.mul(u,y0/b),V3.mul(V3.add(V3.mul(r,Math.sin(t)/a),V3.mul(f,Math.cos(t)/cc)),k)),-Math.PI/2,Math.PI/2,36);
+  });
+}
+/* 胴体（人体スタイル）：断面の楕円を積み重ねた立体を投影 */
+function hull(pts){
+  const p=[...pts].sort((a,b)=>a.x-b.x||a.y-b.y);if(p.length<3)return p;
+  const cr=(o,a,b)=>(a.x-o.x)*(b.y-o.y)-(a.y-o.y)*(b.x-o.x),lo=[],up=[];
+  for(const q of p){while(lo.length>=2&&cr(lo[lo.length-2],lo[lo.length-1],q)<=0)lo.pop();lo.push(q)}
+  for(let i=p.length-1;i>=0;i--){const q=p[i];while(up.length>=2&&cr(up[up.length-2],up[up.length-1],q)<=0)up.pop();up.push(q)}
+  up.pop();lo.pop();return lo.concat(up);
+}
+function torso3D(F,back){
+  const P=PS.pts,T=F.T,k=S.bulk,bt=S.body;
+  const sh=V3.mid(P[11],P[12]),hp=V3.mid(P[23],P[24]);
+  const u=nz(V3.sub(sh,hp));
+  const rS=nz(orth(V3.sub(P[11],P[12]),u)),rH=nz(orth(V3.sub(P[23],P[24]),u));
+  const frameAt=t=>{const w=Math.min(1,Math.max(0,t));let r=nz(V3.add(V3.mul(rS,1-w),V3.mul(rH,w)));const f=nz(cross3(r,u));r=nz(cross3(u,f));return{r,f}};
+  const shW=Math.max(V3.len(V3.sub(P[11],P[12]))/2+T*.04,T*.24),hpW=Math.max(V3.len(V3.sub(P[23],P[24]))/2+T*.13,T*.24);
+  const g=bt==='f'?{sh:.9,ch:.92,wa:.78,hip:1.12,d:.95}:bt==='m'?{sh:1.1,ch:1.08,wa:1.05,hip:.95,d:1.05}:{sh:1,ch:1,wa:.92,hip:1,d:1};
+  const L=[[-.2,T*.075,T*.075,0],[-.06,shW*.95*g.sh,T*.14,-.02],[.12,shW*.88*g.ch,T*.2*g.d,.02],[.34,shW*.78*g.ch,T*.19*g.d,.02],[.6,T*.2*g.wa*k,T*.16*g.d,.0],
+    [.82,(T*.2*g.wa+hpW*g.hip)/2*k,T*.17*g.d,-.01],[1.02,hpW*g.hip*k,T*.18*g.d,-.04],[1.12,hpW*.72*g.hip*k,T*.15*g.d,-.03],[1.22,hpW*.32*g.hip*k,T*.08*g.d,0]];
+  const pos=t=>V3.add(sh,V3.mul(V3.sub(hp,sh),t));
+  const keyR=L.map(([t,a,c,off])=>{const {r,f}=frameAt(t),O=V3.add(pos(t),V3.mul(f,off*T));
+    return{t,a,c,O,r,f}});
+  const ip=(t,j)=>prof(L.map(l=>[l[0],l[j]]),t);
+  const dense=[];for(let t=L[0][0];t<=L[L.length-1][0]+1e-6;t+=.04){const a=ip(t,1),c=ip(t,2),off=ip(t,3),{r,f}=frameAt(t),O=V3.add(pos(t),V3.mul(f,off*T));
+    dense.push({t,a,c,O,r,f,pts:Array.from({length:32},(_,i)=>{const th=i/32*Math.PI*2;return V3.add(O,V3.add(V3.mul(r,a*Math.cos(th)),V3.mul(f,c*Math.sin(th))))})})}
+  const rings=L.map(([t,a,c,off])=>{const {r,f}=frameAt(t),O=V3.add(pos(t),V3.mul(f,off*T));
+    return{t,a,c,O,r,f,pts:Array.from({length:40},(_,i)=>{const th=i/40*Math.PI*2;return V3.add(O,V3.add(V3.mul(r,a*Math.cos(th)),V3.mul(f,c*Math.sin(th))))})}});
+  const paths=[];
+  for(let i=0;i<dense.length-1;i++){const hl=hull([...dense[i].pts,...dense[i+1].pts]);paths.push(()=>{ctx.moveTo(hl[0].x,hl[0].y);for(const q of hl)ctx.lineTo(q.x,q.y);ctx.closePath()})}
+  const ch=rings[2],hpR=rings[6];
+  const extra=[];
+  if(bt==='f'){for(const sg of[1,-1]){const cen=V3.add(V3.add(V3.add(ch.O,V3.mul(ch.f,ch.c*.62)),V3.mul(ch.r,sg*ch.a*.42)),V3.mul(u,-T*.06));
+    extra.push(ellOf(cen,V3.mul(ch.r,T*.095*k),V3.mul(u,T*.09*k),V3.mul(ch.f,T*.075*k)))}}
+  for(const sg of[1,-1]){const cen=V3.add(V3.add(V3.add(hpR.O,V3.mul(hpR.f,-hpR.c*.45)),V3.mul(hpR.r,sg*hpR.a*.4)),V3.mul(u,T*.02));
+    extra.push(ellOf(cen,V3.mul(hpR.r,T*.12*k),V3.mul(u,T*.11*k),V3.mul(hpR.f,T*.085*k)))}
+  extra.forEach(e=>paths.push(()=>ellPath(e)));
+  unionDraw(paths);
+  const ringCurve=(R,t0,t1)=>curve3(th=>V3.add(R.O,V3.add(V3.mul(R.r,R.a*Math.cos(th)),V3.mul(R.f,R.c*Math.sin(th)))),th=>V3.add(V3.mul(R.r,Math.cos(th)/R.a),V3.mul(R.f,Math.sin(th)/R.c)),t0,t1,40);
+  guides(()=>{
+    const fl=t=>{const i=Math.max(0,L.findIndex(l=>l[0]>=t));const R=rings[i];return R};
+    curve3(t=>{const R=fl(t);return V3.add(V3.add(pos(t),V3.mul(R.f,R.c+R.f.x*0)),V3.mul(R.f,0))},t=>fl(t).f,-.05,1.15,40);
+    curve3(t=>{const R=fl(t);return V3.sub(pos(t),V3.mul(R.f,R.c))},t=>V3.mul(fl(t).f,-1),-.05,1.1,40);
+    ringCurve(rings[3],0,Math.PI);ringCurve(rings[4],0,Math.PI*2);ringCurve(rings[6],0,Math.PI);
+  });
+  if(bt==='f'){const fz=ch.f.z;if(fz<.2)lines(()=>{for(let i=0;i<2;i++){const e=extra[i],uu={x:u.x,y:u.y},ua=Math.atan2(uu.y,uu.x);
+    ctx.moveTo(e.x+Math.cos(ua+Math.PI-1.3)*e.rx,e.y+Math.sin(ua+Math.PI-1.3)*e.rx);ctx.ellipse(e.x,e.y,(e.rx+e.ry)/2,(e.rx+e.ry)/2,0,ua+Math.PI-1.3,ua+Math.PI+1.3,false)}},.8)}
+  if(hpR.f.z>-.2)lines(()=>{const a=V3.add(V3.sub(hpR.O,V3.mul(hpR.f,hpR.c*.9)),V3.mul(u,-T*.02)),b=V3.add(V3.sub(rings[7].O,V3.mul(rings[7].f,rings[7].c*.8)),V3.mul(u,-T*.05));ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y)},.5);
+  const nv=V3.add(V3.add(pos(.74),V3.mul(rings[4].f,rings[4].c*1.02)),{x:0,y:0,z:0});
+  if(rings[4].f.z<-.2)lines(()=>{ctx.moveTo(nv.x+T*.012,nv.y);ctx.arc(nv.x,nv.y,T*.012,0,Math.PI*2)},.6);
+  let s2={x:rS.x,y:rS.y};return{s:V.len(s2)>.05?V.norm(s2):{x:1,y:0},v:V.norm({x:hp.x-sh.x,y:hp.y-sh.y})};
 }
 function buildViews(){
   const {yaw,pitch}=S.cam,a=yaw*Math.PI/180,b=pitch*Math.PI/180,ca=Math.cos(a),sa=Math.sin(a),cb=Math.cos(b),sb=Math.sin(b);
@@ -1067,9 +1171,10 @@ function buildViews(){
     const x1=x*ca+z*sa,z1=-x*sa+z*ca;const y2=y*cb-z1*sb,z2=y*sb+z1*cb;
     return{x:x1+ctr.x,y:y2+ctr.y,z:z2,v:q.v}};
   S.sphere={x:ctr.x,y:ctr.y,R};
-  return scenes.map((s,i)=>{const p=S.people[i];const pts=s.pts.map(tf);
+  const rv=q=>{const x1=q.x*ca+q.z*sa,z1=-q.x*sa+q.z*ca;return{x:x1,y:q.y*cb-z1*sb,z:q.y*sb+z1*cb}};
+  return scenes.map((s,i)=>{const p=S.people[i];const pts=s.pts.map(tf);const hd=s.head;
     return{pts,world:pts.map(q=>({x:q.x,y:q.y,z:q.z})),wreal:true,hands:{L:s.hands.L&&s.hands.L.map(tf),R:s.hands.R&&s.hands.R.map(tf)},
-      face:s.face&&s.face.map(tf),show:p.show,ov:p.ov,T3:s.T3}});
+      face:s.face&&s.face.map(tf),show:p.show,ov:p.ov,T3:s.T3,head:{c:tf(hd.c),u:rv(hd.u),f:rv(hd.f),r:rv(hd.r),H:hd.H}}});
 }
 function effView(A,base){
   const o=base.ov,A0=base._A,E={hand:{},foot:{}};
@@ -1153,7 +1258,7 @@ function render(){
   S.bulk=+$('bulk').value;
   S.people.forEach(p=>{PS=p;p._A=analyze();p._E=eff(p._A,p.ov)});
   S.rot=!!(S.cam.yaw||S.cam.pitch);
-  if(S.rot){S.vp=buildViews();S.vp.forEach((v,i)=>{PS=v;v._A=analyze();v._E=effView(v._A,S.people[i])})}else{S.vp=S.people;S.sphere=null}
+  S.vp=buildViews();S.vp.forEach((v,i)=>{PS=v;v._A=analyze();v._E=effView(v._A,S.people[i])});if(!S.rot)S.sphere=null;
   REL=relation();
   if(!S.drag){PS=S.people[S.cur]||S.people[0];showAna(PS._A)}
   S.view=compose(cv,{crop:$('crop').checked,trans:false,photo:$('photo').checked,handles:$('edit').checked,maxSide:1000,labels:true,fixed:S.drag&&S.view?S.view.b:null});
