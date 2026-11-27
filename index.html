@@ -139,7 +139,7 @@ label.c input{width:22px;height:22px;accent-color:var(--blue)}
       <button class="btn blue" id="cnGo" disabled>選んだ画像を作る</button>
       <div class="cnout" id="cnOut"></div>
       <button class="btn" id="cnAll" hidden style="margin-top:10px">まとめて保存</button>
-      <p class="note">Canny・Depth・Tile は元の写真から、OpenPose Full は検出した骨格（全身・両手・顔）から作ります。OpenPose はカメラアングルを変えているとその角度で出力します。Depth は初回に約100MBのモデルを読み込みます。</p>
+      <p class="note">Canny・Depth・Tile は元の写真から、OpenPose Full は検出した骨格（全身・両手・顔）から作ります。OpenPose はカメラアングルを変えているとその角度で出力します。Depth は初回に約50MBのモデルを読み込みます。</p>
     </div>
 
     <div class="card">
@@ -222,7 +222,7 @@ label.c input{width:22px;height:22px;accent-color:var(--blue)}
 <script type="module">
 import {FilesetResolver,PoseLandmarker,HandLandmarker,FaceLandmarker} from './vision_bundle.mjs';
 import * as ort from './ort/ort.min.mjs';
-ort.env.wasm.wasmPaths=new URL('./ort/',location.href).href;ort.env.wasm.numThreads=1;
+ort.env.wasm.wasmPaths=new URL('./ort/',location.href).href;ort.env.wasm.numThreads=1;ort.env.wasm.proxy=false;
 {
 const $=id=>document.getElementById(id);
 const cv=$('cv');let ctx=cv.getContext('2d');
@@ -351,7 +351,7 @@ async function attachHands(people,img,m){
 /* ---------- YOLO11-pose（ONNX）：密着・逆さまに強い全身検出 ---------- */
 const YM={std:{name:'YOLO11-L',parts:['models/yolo11l-pose.part0','models/yolo11l-pose.part1']},
           hq:{name:'YOLO11-X',parts:['models/yolo11x-pose.part0','models/yolo11x-pose.part1','models/yolo11x-pose.part2']},
-          depth:{name:'Depth Anything V2',parts:['models/da2s.part0','models/da2s.part1','models/da2s.part2']}};
+          depth:{name:'Depth Anything',parts:['models/da1s.part0','models/da1s.part1']}};
 const ysess={};
 async function fetchCached(url){
   try{const c=await caches.open('pose-doll-models-v1');let r=await c.match(url);
@@ -359,17 +359,17 @@ async function fetchCached(url){
     return new Uint8Array(await r.arrayBuffer())}
   catch(e){const r=await fetch(url);if(!r.ok)throw new Error('モデルを読み込めませんでした');return new Uint8Array(await r.arrayBuffer())}
 }
-async function yoloSession(key){
+async function yoloSession(key,forceWasm){
   if(ysess[key])return ysess[key];
   ysess[key]=(async()=>{
     const M=YM[key],bufs=[];let i=0;
     for(const u of M.parts){i++;msg(`解析モデル（${M.name}）を読み込み中… ${i}/${M.parts.length}（2回目以降は端末に保存したものを使います）`);bufs.push(await fetchCached(u))}
     const all=new Uint8Array(bufs.reduce((n,b)=>n+b.length,0));let o=0;for(const b of bufs){all.set(b,o);o+=b.length}
     msg('モデルを準備中…');
-    try{if(navigator.gpu&&await navigator.gpu.requestAdapter())return await ort.InferenceSession.create(all,{executionProviders:['webgpu'],graphOptimizationLevel:'all'})}catch(e){console.warn('webgpu',e)}
-    try{ort.env.wasm.proxy=true;return await ort.InferenceSession.create(all,{executionProviders:['wasm'],graphOptimizationLevel:'all'})}catch(e){console.warn('wasm-proxy',e)}
-    try{ort.env.wasm.proxy=false;return await ort.InferenceSession.create(all,{executionProviders:['wasm'],graphOptimizationLevel:'all'})}catch(e){console.warn('wasm',e)}
-    throw new Error('この端末ではモデルを実行できませんでした');
+    let last='';
+    if(!forceWasm)try{if(navigator.gpu&&await navigator.gpu.requestAdapter()){const se=await ort.InferenceSession.create(all,{executionProviders:['webgpu'],graphOptimizationLevel:'all'});se.ep='webgpu';return se}}catch(e){console.warn('webgpu',e);last=e.message||String(e)}
+    try{const se=await ort.InferenceSession.create(all,{executionProviders:['wasm'],graphOptimizationLevel:'all'});se.ep='wasm';return se}catch(e){console.warn('wasm',e);last=e.message||String(e)}
+    throw new Error('この端末ではモデルを実行できませんでした（'+last.slice(0,120)+'）');
   })();
   ysess[key].catch(()=>{delete ysess[key]});
   return ysess[key];
@@ -1500,15 +1500,29 @@ function tileMap(rate){
   const sx=s.getContext('2d');sx.imageSmoothingQuality='high';sx.drawImage(S.img,0,0,s.width,s.height);
   const o=document.createElement('canvas');o.width=w;o.height=h;const ox=o.getContext('2d');ox.imageSmoothingQuality='high';ox.drawImage(s,0,0,w,h);return o;
 }
+async function releaseSession(key){if(!ysess[key])return;try{const se=await ysess[key];await se.release()}catch(e){}delete ysess[key]}
 async function runDepth(){
-  const sess=await yoloSession('depth');msg('Depth を推定中…');await tick();
-  const Z=518,c=document.createElement('canvas');c.width=c.height=Z;const x=c.getContext('2d');x.drawImage(S.img,0,0,Z,Z);
-  const d=x.getImageData(0,0,Z,Z).data,N=Z*Z,t=new Float32Array(3*N),mu=[.485,.456,.406],sd=[.229,.224,.225];
-  for(let i=0;i<N;i++)for(let k=0;k<3;k++)t[k*N+i]=(d[i*4+k]/255-mu[k])/sd[k];
-  const out=await sess.run({[sess.inputNames[0]]:new ort.Tensor('float32',t,[1,3,Z,Z])});
-  const o=out[sess.outputNames[0]].data;let mn=1e9,mx=-1e9;for(let i=0;i<N;i++){mn=Math.min(mn,o[i]);mx=Math.max(mx,o[i])}
-  const nd=new Float32Array(N);for(let i=0;i<N;i++)nd[i]=(o[i]-mn)/((mx-mn)||1);
-  S.depth={w:Z,h:Z,data:nd};
+  // メモリを空けるため、姿勢モデルを一度解放する（次の解析時に読み込み直す）
+  for(const k of['std','hq'])await releaseSession(k);
+  const tryRun=async(Z,forceWasm)=>{
+    const sess=await yoloSession('depth',forceWasm);msg(`Depth を推定中…（${sess.ep==='webgpu'?'GPU':'CPU'}）`);await tick();
+    const c=document.createElement('canvas');c.width=c.height=Z;const x=c.getContext('2d');x.drawImage(S.img,0,0,Z,Z);
+    const d=x.getImageData(0,0,Z,Z).data,N=Z*Z,t=new Float32Array(3*N),mu=[.485,.456,.406],sd=[.229,.224,.225];
+    for(let i=0;i<N;i++)for(let k=0;k<3;k++)t[k*N+i]=(d[i*4+k]/255-mu[k])/sd[k];
+    const out=await sess.run({[sess.inputNames[0]]:new ort.Tensor('float32',t,[1,3,Z,Z])});
+    const ot=out[sess.outputNames[0]],o=ot.data,h=ot.dims[ot.dims.length-2],w=ot.dims[ot.dims.length-1];
+    let mn=1e9,mx=-1e9;for(let i=0;i<o.length;i++){const v=o[i];if(v<mn)mn=v;if(v>mx)mx=v}
+    if(!(mx>mn))throw new Error('Depth の結果が空でした');
+    const nd=new Float32Array(w*h);for(let i=0;i<w*h;i++)nd[i]=(o[i]-mn)/(mx-mn);
+    return{w,h,data:nd};
+  };
+  let res=null,err='';
+  for(const [Z,cpu] of [[518,false],[518,true],[364,true]]){
+    try{res=await tryRun(Z,cpu);break}catch(e){console.warn('depth',Z,cpu,e);err=e.message||String(e);await releaseSession('depth')}
+  }
+  await releaseSession('depth');
+  if(!res)throw new Error('Depth を実行できませんでした（'+err.slice(0,120)+'）');
+  S.depth=res;
   if(S.people.length>1){const zs=S.people.map(p=>[11,12,23,24].reduce((a,i)=>a+(depthAt(p.pts[i])||0),0));S.front=zs.indexOf(Math.max(...zs))}
   return S.depth;
 }
